@@ -1,0 +1,15 @@
+{
+  "_": "Copie ce fichier en lieux.json (même dossier) et adapte les chemins. Tout ce qui n'est pas donné prend une valeur par défaut sous donnees/ et videos/ (à la racine). Sur Windows, double les antislashs (C:\\\\...). Sur macOS : \"ios\": \"/opt/homebrew/bin/ios\" (ou le chemin de go-ios) et \"pymobiledevice3\": \"<racine>/.venv-pmd3/bin/pymobiledevice3\".",
+  "hote": "127.0.0.1",
+  "port": 4330,
+  "ios": "C:\\Outils\\go-ios\\ios.exe",
+  "pymobiledevice3": "C:\\Telephones\\.venv-pmd3\\Scripts\\pymobiledevice3.exe",
+  "donnees": "C:\\Telephones\\donnees",
+  "videos": "C:\\Telephones\\videos",
+  "agent": "C:\\Telephones\\donnees\\agent",
+  "certificats": "C:\\Telephones\\donnees\\certificats",
+  "secrets": "C:\\Telephones\\donnees\\secrets",
+  "journal": "C:\\Telephones\\donnees\\telephones.log",
+  "port_agent": 18100,
+  "port_flux": 19100
+}

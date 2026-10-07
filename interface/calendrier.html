@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calendrier · Téléphones</title>
+<link rel="stylesheet" href="i/style.css">
+<style>
+  .cal-tete{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .cal-info{padding:10px 22px 0;color:var(--ink-3);font-size:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .cal-info b{color:var(--ink-2);font-weight:600}
+  .cal-info a.lien{color:var(--info)}
+  .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;padding:14px 22px 30px}
+  @media (max-width:980px){.cal{grid-template-columns:1fr}}
+  .jour{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--r);min-height:200px;display:flex;flex-direction:column}
+  .jour.auj{border-color:var(--info)}
+  .jour.passe{opacity:.62}
+  .jour h3{margin:0;padding:10px 12px 8px;font-size:13px;font-weight:600;color:var(--ink-2);display:flex;align-items:baseline;gap:6px;border-bottom:1px solid var(--line)}
+  .jour h3 .n{font-size:11px;color:var(--ink-4);font-weight:500;margin-left:auto}
+  .jour .liste{padding:8px;display:flex;flex-direction:column;gap:7px}
+  .ent{display:grid;grid-template-columns:34px 1fr;gap:8px;padding:7px;border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--line);cursor:pointer;text-align:left}
+  .ent:hover{border-color:var(--line-3)}
+  .ent img,.ent .sans{width:34px;height:60px;object-fit:cover;border-radius:6px;background:var(--surface-3)}
+  .ent .h{font-size:12px;font-weight:700;letter-spacing:-.01em}
+  .ent .t{font-size:12px;color:var(--ink-2);line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin:2px 0 4px}
+  .ent .g{font-size:10px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em}
+  .reseaux{display:flex;gap:4px;flex-wrap:wrap}
+  .res{font-size:10px;padding:2px 6px;border-radius:99px;background:var(--surface-3);color:var(--ink-2);white-space:nowrap}
+  .res.en_attente{background:var(--info-2);color:var(--info)}
+  .res.en_cours{background:var(--warn-2);color:var(--warn)}
+  .res.publie{background:var(--ok-2);color:var(--ok)}
+  .res.echec{background:var(--urgent-2);color:var(--urgent)}
+  .ent.echec{border-color:rgba(255,69,58,.45)}
+  .ent.en_cours{border-color:rgba(255,214,10,.45)}
+  .libre{font-size:11px;color:var(--ink-4);border:1px dashed var(--line-2);border-radius:var(--r-sm);padding:6px 8px}
+  .vide{font-size:12px;color:var(--ink-4);padding:6px 4px}
+  .legende{display:flex;gap:6px;align-items:center}
+  .fiche-cal{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px}
+  .fiche-cal[hidden]{display:none}
+  .fiche-cal .boite{background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-md);padding:18px;width:min(460px,100%);max-height:90vh;overflow:auto}
+  .fiche-cal h2{margin:0 0 4px;font-size:16px}
+  .fiche-cal .compte{display:flex;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+  .fiche-cal .compte .grow{min-width:0}
+  .fiche-cal .err{color:var(--urgent);font-size:12px;margin-top:2px}
+  .fiche-cal .lien{color:var(--info);font-size:12px;word-break:break-all}
+  @media (max-width:700px){
+    .barre{flex-wrap:wrap;gap:8px;padding:10px 16px}
+    .barre h1{font-size:16px}
+    .cal-tete{order:5;flex-basis:100%;flex-wrap:nowrap}
+    .cal-tete #periode{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+    .cal-info{padding:8px 16px 0}
+    .cal{padding:10px 16px 24px;gap:8px}
+    .jour{min-height:0}
+    .jour.passe .liste .vide{display:none}
+  }
+</style>
+</head>
+<body>
+<header class="barre">
+  <a class="retour" href="./">← Téléphones</a>
+  <h1>Calendrier</h1>
+  <div class="cal-tete">
+    <button class="btn" id="prec" title="Semaine précédente">◀</button>
+    <button class="btn" id="auj">Cette semaine</button>
+    <button class="btn" id="suiv" title="Semaine suivante">▶</button>
+    <b id="periode"></b>
+  </div>
+  <div class="grow"></div>
+  <a class="btn" href="warmup">🔥 Warm-up</a>
+  <a class="btn" href="./">📱 Téléphones</a>
+</header>
+<div class="cal-info" id="info"></div>
+<div class="cal" id="cal"></div>
+<div class="fiche-cal" id="fiche" hidden><div class="boite" id="boite"></div></div>
+<div id="toast" class="toast" hidden></div>
+<script src="i/calendrier.js"></script>
+</body>
+</html>

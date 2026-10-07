@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Téléphones</title>
+<link rel="stylesheet" href="i/style.css">
+</head>
+<body>
+<header class="barre">
+  <h1>Téléphones</h1>
+  <div class="grow"></div>
+  <a class="btn" href="warmup">🔥 Warm-up</a>
+  <a class="btn" href="calendrier">📅 Calendrier</a>
+  <span id="pilote" class="puce"></span>
+  <button id="pause" class="btn"></button>
+</header>
+<main class="grille">
+  <section class="col col-tel">
+    <div id="choix-tel" class="choix-tel"></div>
+    <div id="fiche"></div>
+  </section>
+  <section class="col col-ecran">
+    <div class="ecran-zone">
+      <div id="cadre" class="cadre">
+        <img id="ecran" alt="">
+        <div id="calque" class="calque" tabindex="0" title="Clic : toucher · glisser : swipe · appui long : maintenir · molette : défiler · clavier : écrire"></div>
+        <div id="boites" class="boites" hidden></div>
+        <div id="voile" class="voile"></div>
+      </div>
+    </div>
+    <div class="commandes">
+      <button class="btn" data-geste="accueil" title="Écran d'accueil">⌂ Accueil</button>
+      <button class="btn" data-geste="deverrouiller" title="Allume et déverrouille (sans code)">☀ Réveiller</button>
+      <button class="btn" id="b-arbre" title="Les éléments de l'écran, avec leur nom exact">⌗ Arbre</button>
+      <button class="btn" id="b-capture" title="Capture pleine résolution">⧉ Capture</button>
+      <button class="btn" id="b-relancer" title="Relance l'agent sur l'iPhone">⟳ Agent</button>
+    </div>
+    <div id="apps" class="apps"></div>
+    <form id="clavier" class="clavier">
+      <input id="texte" class="in" placeholder="Écrire sur l'iPhone (ou clique l'écran et tape au clavier)" autocomplete="off">
+      <button class="btn">Écrire</button>
+      <button class="btn" type="button" id="b-coller" title="Met le texte dans le presse-papiers de l'iPhone (émojis compris)">Presse-papiers</button>
+    </form>
+    <div id="detail" class="detail" hidden></div>
+  </section>
+  <section class="col col-file">
+    <nav class="onglets">
+      <a data-onglet="publications" class="on">Publications</a>
+      <a data-onglet="comptes">Comptes</a>
+      <a data-onglet="journal">Journal</a>
+    </nav>
+    <div id="panneau"></div>
+  </section>
+</main>
+<aside id="tiroir" class="tiroir" hidden></aside>
+<div id="toast" class="toast" hidden></div>
+<script src="i/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+# ce qui est propre à chaque installation (jamais dans le dépôt)
+lieux.json
+donnees/
+videos/
+*.p12
+*.mobileprovision
+*.ipa
+scrapecreators.env
+.venv/
+.venv-pmd3/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+
+# les notes d'installation propres à chacun (CLAUDE.md, étape 0)
+docs/MON_INSTALLATION.md

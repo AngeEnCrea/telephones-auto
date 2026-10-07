@@ -1,0 +1,3 @@
+#!/bin/sh
+# Le faux go-ios des essais : même interface que ios.exe (voir faux_iphone.py).
+exec "${FAUX_PYTHON:-python3}" "$(dirname "$0")/faux_iphone.py" "$@"

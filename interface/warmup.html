@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warm-up · Téléphones</title>
+<link rel="stylesheet" href="i/style.css">
+<style>
+  .wu-info{padding:10px 22px 0;color:var(--ink-3);font-size:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+  .wu-info b{color:var(--ink-2);font-weight:600}
+  .wu{display:grid;grid-template-columns:380px minmax(0,1fr);gap:18px;padding:14px 22px 30px;align-items:start}
+  @media (max-width:980px){.wu{grid-template-columns:1fr}}
+  .wu h2{font-size:14px;margin:0 0 10px;font-weight:650;color:var(--ink-2)}
+  .bloc{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--r-md);padding:16px}
+  .bloc label{display:block;font-size:12px;color:var(--ink-3);margin:12px 0 5px}
+  .bloc label.case{display:flex;gap:8px;align-items:flex-start;color:var(--ink-2);font-size:13px;margin:9px 0 0}
+  .bloc label.case input{margin-top:2px}
+  .comptes{display:flex;flex-direction:column;gap:4px;max-height:260px;overflow:auto}
+  .comptes label{display:flex;gap:8px;align-items:center;margin:0;padding:6px 8px;border-radius:var(--r-sm);background:var(--surface-2);color:var(--ink-2);font-size:13px}
+  .comptes label.non{opacity:.45}
+  .comptes .q{margin-left:auto;font-size:11px;color:var(--ink-4)}
+  .deux{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .estim{font-size:12px;color:var(--ink-3);margin-top:8px}
+  .note{font-size:12px;color:var(--ink-4);margin-top:10px;line-height:1.45}
+  .liste{display:flex;flex-direction:column;gap:12px}
+  .wc{background:var(--surface-1);border:1px solid var(--line);border-radius:var(--r-md);padding:14px 16px}
+  .wc.fini{opacity:.7}
+  .wc .l1{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .wc .nom{font-weight:650;font-size:15px}
+  .wc .g{font-size:12px;color:var(--ink-3)}
+  .plat{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--surface-3);color:var(--ink-2)}
+  .chip{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--surface-3);color:var(--ink-2)}
+  .chip.en_cours{background:var(--info-2);color:var(--info)} .chip.termine{background:var(--ok-2);color:var(--ok)} .chip.arrete{background:var(--surface-3);color:var(--ink-3)}
+  .barre-p{height:6px;border-radius:99px;background:var(--surface-3);overflow:hidden;margin:10px 0 4px}
+  .barre-p div{height:100%;background:var(--info)}
+  .mots{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+  .mots span{font-size:11px;padding:2px 8px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line-2);color:var(--ink-2)}
+  .seances{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center}
+  .se{font-size:11px;padding:3px 8px;border-radius:var(--r-sm);background:var(--surface-2);border:1px solid var(--line);color:var(--ink-3)}
+  .se.faite{color:var(--ok);border-color:rgba(48,209,88,.35)} .se.en_cours{color:var(--info);border-color:rgba(100,210,255,.4)}
+  .se.echec{color:var(--urgent);border-color:rgba(255,69,58,.4)} .se.due{color:var(--warn);border-color:rgba(255,214,10,.4)}
+  .chiffres{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--ink-2);margin-top:10px}
+  .bloquee{font-size:12px;margin-top:8px;color:var(--warn)} .bloquee.non{color:var(--ink-3)}
+  .derniere{font-size:12px;color:var(--ink-3);margin-top:8px}
+  .derniere .err{color:var(--urgent)}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .actions .btn{font-size:12px;padding:6px 10px}
+  .vide-l{color:var(--ink-4);font-size:13px;padding:8px 2px}
+  .fiche-w{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px}
+  .fiche-w[hidden]{display:none}
+  .fiche-w .boite{background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-md);padding:18px;width:min(560px,100%);max-height:90vh;overflow:auto}
+  .fiche-w h3{margin:0 0 4px;font-size:16px}
+  .jl{display:grid;grid-template-columns:62px 1fr;gap:8px;padding:6px 0;border-top:1px solid var(--line);font-size:12px}
+  .jl img{display:block;width:120px;border-radius:8px;margin-top:6px;cursor:zoom-in}
+  .jl .h{color:var(--ink-4);font-variant-numeric:tabular-nums}
+  .ls{display:flex;gap:8px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:12px;cursor:pointer}
+  .ls:hover{background:var(--surface-2)}
+  @media (max-width:700px){
+    .barre{flex-wrap:wrap;gap:8px;padding:10px 16px}
+    .barre h1{font-size:16px}
+    .wu-info{padding:8px 16px 0}
+    .wu{padding:10px 16px 24px}
+  }
+</style>
+</head>
+<body>
+<header class="barre">
+  <a class="retour" href="./">← Téléphones</a>
+  <h1>🔥 Warm-up</h1>
+  <div class="grow"></div>
+  <a class="btn" href="calendrier">📅 Calendrier</a>
+  <a class="btn" href="./">📱 Téléphones</a>
+</header>
+<div class="wu-info" id="info"></div>
+<main class="wu">
+  <section>
+    <form id="f-new" class="bloc">
+      <h2>Mettre des comptes en warm-up</h2>
+      <label>Comptes</label>
+      <div class="comptes" id="f-comptes"></div>
+      <label for="f-mots">Mots-clés de la niche (un par ligne)</label>
+      <textarea id="f-mots" name="mots" rows="4" placeholder="vinted&#10;achat revente&#10;resell"></textarea>
+      <div class="note" style="margin-top:6px">Ce que le compte va chercher puis regarder, comme quelqu'un de la niche.</div>
+      <div class="deux">
+        <div><label for="f-jours">Durée (jours)</label><input class="in" id="f-jours" name="jours" type="number" min="1" max="60" value="7"></div>
+        <div><label for="f-min">Minutes par jour</label><input class="in" id="f-min" name="minutes_jour" type="number" min="5" max="180" value="40"></div>
+      </div>
+      <div class="estim" id="f-estim"></div>
+      <label class="case"><input type="checkbox" name="likes" checked> Liker des vidéos de la niche (dès le 2e jour, 12 par jour au plus)</label>
+      <label class="case"><input type="checkbox" name="abonnements" checked> S'abonner à quelques comptes de la niche (dès le 3e jour, 3 par jour au plus)</label>
+      <label class="case"><input type="checkbox" name="bloque" checked> Bloquer les publications de ces comptes pendant le warm-up</label>
+      <div style="margin-top:14px"><button class="btn prim">🔥 Lancer le warm-up</button></div>
+      <div class="note">Jamais de commentaire ni de message. Les séances (≈ 13 min) tombent au hasard entre 9 h et 23 h, toujours entre deux publications : une publication passe avant.</div>
+    </form>
+  </section>
+  <section>
+    <h2>En cours</h2>
+    <div class="liste" id="en-cours"></div>
+    <h2 style="margin-top:22px">Terminés</h2>
+    <div class="liste" id="finis"></div>
+  </section>
+</main>
+<div class="fiche-w" id="fiche" hidden><div class="boite" id="boite"></div></div>
+<div id="toast" class="toast" hidden></div>
+<script src="i/warmup.js"></script>
+</body>
+</html>
