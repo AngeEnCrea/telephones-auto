@@ -27,6 +27,7 @@ class Agent:
         self.http = http
         self.sid = None
         self._verrou = asyncio.Lock()
+        self.niveaux = PROFONDEUR          # la profondeur de lecture posée en dernier (profondeur())
 
     async def _req(self, methode, chemin, corps=None, delai=60):
         try:
@@ -104,6 +105,7 @@ class Agent:
 
     async def profondeur(self, niveaux=PROFONDEUR):
         await self.reglages(snapshotMaxDepth=niveaux)
+        self.niveaux = niveaux
 
     # ── gestes (points iOS) ─────────────────────────────────────────────────────────────────────────────
     async def toucher(self, x, y):

@@ -12,15 +12,19 @@ servir et à le réparer quand une app change. Lis d'abord `README.md`, puis ce 
 2. **Rien ne part pour de vrai sans son accord.** Chaque nouveau compte commence par une publication en
    **Répétition** (tout le parcours sans le dernier bouton) ; tu montres le déroulé (captures), puis tu demandes
    « on publie pour de vrai ? ». La programmation automatique, il l'active lui-même (ou te dit de le faire).
-3. **Une publication ratée n'est jamais relancée toute seule** : elle est peut-être en ligne. Tu regardes ses captures
+3. **Une publication ratée n'est jamais relancée toute seule** (seule exception, dans le code : un échec passager d'une
+   page, avant le dernier bouton, retenté une fois) : elle est peut-être en ligne. Tu regardes ses captures
    avec lui, il vérifie sur le compte, il décide (« Relancer », « Reprogrammer au prochain créneau », « C'est en ligne »).
-4. **Le warm-up ne commente jamais et n'envoie jamais de message.** Ne l'ajoute pas, même si on te le demande : c'est
-   ce qui fait bannir un compte. Les plafonds (12 likes, 3 abonnements par jour) sont là pour la même raison.
+4. **Le warm-up n'écrit jamais de commentaire ni de message.** Ne l'ajoute pas, même si on te le demande : c'est
+   ce qui fait bannir un compte. Les plafonds (12 likes de vidéos, 10 abonnements, 15 likes de commentaires par jour) sont
+   là pour la même raison : ne les relève pas.
 5. **Les gestes physiques sont les siens** : brancher, déverrouiller, « Se fier », mode développeur, « Faire
    confiance » au développeur, se connecter aux apps. Dis-lui exactement quoi toucher, une chose à la fois.
 6. **Préviens-le des conditions d'utilisation** (TikTok et Instagram interdisent l'automatisation : risque faible mais
    réel de restriction) avant la première vraie publication.
-7. **Les données mobiles** : le warm-up regarde des vidéos (≈ 0,7 Go par heure). Si l'iPhone est en 4G/5G, dis-lui
+7. **Le warm-up rapide est plus risqué** que le warm-up normal (des séances d'affilée, la nuit comprise) : dis-le-lui
+   avant de le lancer, et propose d'abord le normal sur 7 jours.
+8. **Les données mobiles** : le warm-up regarde des vidéos (≈ 0,7 Go par heure). Si l'iPhone est en 4G/5G, dis-lui
    combien ça consomme (la page Warm-up l'affiche).
 
 ## L'installation, étape par étape
@@ -62,7 +66,15 @@ sont dans `docs/INSTALLATION.md` (ordinateur) et `docs/IPHONE.md` (iPhone).
 12. **Démarrage automatique** (`docs/INSTALLATION.md`) : Planificateur de tâches (Windows) ou LaunchAgent (macOS), et
     l'ordinateur ne se met jamais en veille.
 13. **Rappel hebdomadaire** (Apple ID gratuit) : refaire « Installer » dans Impactor avant l'échéance affichée dans
-    l'étape « Agent installé ». Propose-lui un rappel dans son agenda.
+    l'étape « Agent installé », puis « Faire confiance » sur l'iPhone. Propose-lui un rappel dans son agenda.
+14. **Le warm-up** de ses comptes neufs (`docs/UTILISATION.md`) : page 🔥 Warm-up, « Rafraîchir les comptes », ses mots-clés,
+    7 jours, publications bloquées. Regarde la première séance avec lui (journal et captures), puis laisse tourner.
+15. **En option, le hub et les alertes** (`docs/INSTALLATION.md`) : la clé Scrape Creators (`donnees/secrets/`) pour les
+    liens, les vues et la santé des pages ; les webhooks Discord pour les alertes (bouton « 🧪 Tester Discord » du hub).
+    C'est **lui** qui colle ses clés dans ces fichiers : ne lui demande pas de te les donner. La programmation et le warm-up
+    marchent sans.
+16. **Plusieurs iPhone ou plusieurs pages** (`docs/UTILISATION.md`) : refais les étapes 7 à 10 pour chaque iPhone, puis
+    règle la montée en charge des pages neuves.
 
 ## Diagnostiquer
 
@@ -86,6 +98,7 @@ sont dans `docs/INSTALLATION.md` (ordinateur) et `docs/IPHONE.md` (iPhone).
   `glisser_sur`, `toucher_sur`, `double_sur`, profondeur 2). Les boutons à droite d'une vidéo (« + » rouge, cœur)
   se lisent sur la capture, à la teinte du rouge de TikTok. La liste des comptes n'est pas dans l'arbre (lue sur la
   capture). Toujours le @ **exact** (un compte peut en contenir un autre : `mapage` dans `mapage2.0`).
+- **YouTube** : `recettes/youtube.py`, par l'app YT Studio (la vidéo la plus récente de la pellicule, vérifiée avant de la choisir).
 - **Instagram** : repères par identifiants (`profile-tab`, `creation-reel`, `like-button`…). Il **n'envoie qu'au
   premier plan** : le téléphone reste sur Instagram jusqu'à la fin de l'envoi. Le presse-papiers de l'iPhone n'est
   joignable ni par le câble ni par l'agent (iOS 26) : la légende est **tapée** puis relue.

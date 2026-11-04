@@ -15,7 +15,6 @@ import csv
 import logging
 import shutil
 import time
-from pathlib import Path
 
 import lieux
 
@@ -23,6 +22,16 @@ log = logging.getLogger("videos")
 PREFIXE = "dossier:"
 PROJET = "perso"              # un seul « projet » : tous les comptes et toutes les vidéos de ce téléphone
 EXTENSIONS = (".mp4", ".mov", ".m4v")
+EN_RETOUCHE = ()              # pas de relecture ici : une vidéo est dans le dossier, ou elle n'y est plus
+
+
+class PasPubliable(RuntimeError):
+    """Au moment de partir, la vidéo n'est plus dans le dossier : `etat` reste None, la publication est annulée, ce
+    n'est ni un échec ni une alerte (programmation.py, publication.py)."""
+
+    def __init__(self, message, etat=None):
+        super().__init__(message)
+        self.etat = etat
 
 
 def dossier():
@@ -73,7 +82,8 @@ async def videos_publiables(http=None):
             continue
         out.append({"cle": cle_de(f), "projet": "Mes vidéos", "emoji": "🎬", "titre": f.stem, "type": "short",
                     "statut": "valide", "description": legende(f), "groupe": rel.parts[0] if len(rel.parts) == 2 else None,
-                    "origine": None, "vignette": None, "modifiee": f.stat().st_mtime})
+                    "origine": None, "vignette": None, "modifiee": f.stat().st_mtime,
+                    "niche_ok": True, "pepite": False})   # le dossier d'un groupe EST sa niche : c'est toi qui ranges
     out.sort(key=lambda v: v["modifiee"])
     return out
 
@@ -82,7 +92,7 @@ async def verifier_publiable(http, cle):
     """Relue au moment de publier : une vidéo retirée du dossier entre-temps ne part pas."""
     f = fichier(cle)
     if not f.is_file():
-        raise RuntimeError("la vidéo n'est plus dans le dossier des vidéos : rien ne part")
+        raise PasPubliable("la vidéo n'est plus dans le dossier des vidéos : rien ne part")
     return {"fichier": str(f)}
 
 
@@ -91,6 +101,17 @@ async def telecharger(http, cle, destination):
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(fichier(cle), destination)
     return destination
+
+
+async def copie_locale(http, cle, dossier_copies):
+    """La copie de travail d'une vidéo encore dans le dossier ; refaite si le fichier a changé de taille depuis."""
+    await verifier_publiable(http, cle)
+    dest = dossier_copies / nom_de_travail(cle)
+    if dest.exists() and dest.stat().st_size != fichier(cle).stat().st_size:
+        dest.unlink()
+    if not dest.exists():
+        await telecharger(http, cle, dest)
+    return dest
 
 
 def nom_de_travail(cle):

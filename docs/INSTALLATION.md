@@ -119,5 +119,37 @@ Le service peut retrouver l'adresse de chaque vidéo publiée (TikTok et Instagr
 SCRAPECREATORS_API_KEY=ta-clé
 ```
 
-Sans clé, tout marche pareil : la publication est notée « publiée », sans lien (« Lien pas retrouvé »). Les liens
-trouvés sont aussi notés dans `donnees/liens.csv`.
+La même clé fait marcher le **relevé des vues** (8 h et 21 h 45), la santé des pages et les vues du hub : compte une
+centaine de crédits par jour pour quelques comptes (le hub affiche le solde et te prévient sous 300).
+
+Sans clé, tout marche pareil : la publication est notée « publiée », sans lien (« Lien pas retrouvé »), et le hub dit
+qu'il n'a pas de relevé. Les liens trouvés sont aussi notés dans `donnees/liens.csv`.
+
+## Option : les alertes sur Discord
+
+Crée un webhook par salon sur ton serveur (Paramètres du salon › Intégrations › Webhooks) et range-les dans
+`donnees/secrets/discord.env`. Mets-en autant que tu veux, les salons absents sont ignorés :
+
+```
+DISCORD_SANTE=https://discord.com/api/webhooks/...
+DISCORD_RAPPORT=https://discord.com/api/webhooks/...
+DISCORD_PUBLICATIONS=https://discord.com/api/webhooks/...
+DISCORD_TELEPHONES=https://discord.com/api/webhooks/...
+DISCORD_WARMUP=https://discord.com/api/webhooks/...
+```
+
+| | |
+|---|---|
+| `SANTE` | 0 vue, shadowban probable, chute, compte déconnecté, 2 échecs d'affilée |
+| `RAPPORT` | le bilan du soir de chaque page |
+| `PUBLICATIONS` | chaque publication (complétée par son lien), chaque échec |
+| `TELEPHONES` | iPhone hors ligne, agent à re-signer, batterie basse, crédits bas |
+| `WARMUP` | le résumé de chaque séance de warm-up |
+
+Relance le service, puis bouton **🧪 Tester Discord** dans le hub. Un webhook donne le droit d'écrire dans ton salon :
+ne le partage pas (`*.env` et `secrets/` restent hors du dépôt).
+
+## Si l'ordinateur fait aussi autre chose
+
+Le pilote d'Apple a besoin de processeur : sur une machine à 4 cœurs occupée à 100 % (rendus vidéo), l'iPhone « se
+débranche » et les publications échouent. Baisse la priorité de ces tâches ou réserve-leur les autres cœurs.

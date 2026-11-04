@@ -72,6 +72,12 @@ peu profond. Si tu écris une recette : voir [`RECETTES.md`](RECETTES.md).
 - **Une légende** est **tapée** puis relue (le presse-papiers de l'iPhone n'est pas joignable sur iOS 26) : une très
   longue légende prend quelques secondes de plus.
 
+## Le hub et les alertes
+
+- **Pas de relevé** : pas de clé dans `donnees/secrets/scrapecreators.env`, ou plus de crédits.
+- **« 🧪 Tester Discord » grisé** : pas de webhook lu dans `donnees/secrets/discord.env` (relance le service après l'avoir rempli).
+- **📵 iPhone hors ligne** alors qu'il est branché : processeur à 100 % (voir `INSTALLATION.md`), ou signature expirée : refais « Installer » dans Impactor, puis « Faire confiance » sur l'iPhone.
+
 ## Le warm-up
 
 - **« Plus sur les vidéos / les reels »** dans le journal d'une séance : une fenêtre ou une pub a fait sortir la

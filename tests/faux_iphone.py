@@ -14,6 +14,7 @@ captures, lien renvoyé au centre), pas la recette."""
 import asyncio
 import base64
 import io
+import hashlib
 import json
 import os
 import re
@@ -37,15 +38,32 @@ INSTAGRAM = "com.burbn.instagram"
 def etat_initial():
     return {"branche": True, "appaire": True, "devmode": True, "image": False, "ios": "26.0", "tunnel": False,
             "apps": [TIKTOK, INSTAGRAM, VLC, WDA_BUNDLE], "presse_papiers": "", "ecran": "accueil", "photos": [],
-            "tt_comptes": ["ma_page2.0", "ma_page"], "tt_actif": "ma_page2.0", "tt_ajout_touche": False, "tt_videos": {},
-            "tt_lancements": 0, "tt_photos_ok": False, "tt_desc": "", "selection": None, "alertes": [],
+            "tt_comptes": ["ma_page2.4", "ma_page"], "tt_actif": "ma_page2.4", "tt_ajout_touche": False, "tt_videos": {},
+            "tt_lancements": 0, "tt_shop": False, "tt_shop_choix": None, "tt_photos_ok": False, "tt_desc": "", "selection": None, "alertes": [],
             "tt_camera_vue": False, "tt_filtre": "Tous", "tt_choisies": [], "tt_son": None, "tt_brouillons": {}, "tt_posts": [],
             "ig_comptes": ["ma.page.ig2", "ma.page.ig"], "ig_actif": "ma.page.ig2", "ig_pubs": {}, "focus": None,
             "ig_multi": {"ma.page.ig": True}, "ig_choisies": [], "ig_selection": None, "ig_desc": "", "ig_recherche": "",
             "ig_brouillons": 0,
             "tss_https_ko": True, "image_par": None,     # comme le PC : Windows ne connaît pas la racine d'Apple
             "xctest_non_signe": True, "agent_signe_par": None,   # comme Impactor : module de test de l'agent pas signé
-            "raccourci_efface": False,                          # le Raccourci à 2 actions (02/10/2026) : il n'efface pas le fichier
+            "raccourci_efface": False,
+            # la demande d'iOS « Autoriser « Auto importer » à produire 1 photo ? » (vue le 16/10/2026 sur l'iPhone 2) :
+            # elle arrive APRÈS la vidéo dans la pellicule et reste par-dessus les apps tant qu'on n'y répond pas
+            "raccourci_demande": False, "raccourci_choix": None,
+            # TikTok, 1re vidéo d'un compte neuf : « Publier la vidéo publiquement ? » (16/10/2026, @mapage.niche)
+            "tt_public": False,
+            # TikTok, après « Publier » : « La situation évolue rapidement dans ton pays… » (Annuler / Publier),
+            # 28/10/2026, @mapage.niche, publication 1735
+            "tt_avertissement": False,
+            # Instagram, 1er reel d'un compte public : le volet « D'autres personnes peuvent désormais télécharger et
+            # partager vos reels » couvre la légende (18/10/2026, @mapage.niche et @mapage.autre)
+            "ig_volet": False,                          # le Raccourci à 2 actions (02/10/2026) : il n'efface pas le fichier
+            # les écrans de Meta par-dessus Instagram, au lancement (21/10/2026, iPhone 1) : combien de prochains lancements
+            # les montrent (-1 : tous) ; « Démarrer » et « Examiner le compte » ne doivent jamais être touchés
+            "ig_pubmeta": 0, "ig_comptemeta": 0, "ig_lancements": 0,
+            # « Nettoyage du compte » (24/10/2026, iPhone 1) : à chaque lancement tant que l'utilisateur n'en sort pas ; ses deux
+            # boutons suppriment des reels et ne doivent jamais être touchés
+            "ig_nettoyage": False,
             "menu_coller_jusqua": 0, "envoi_jusqua": 0, "journal": [],
             # le warm-up (07/10/2026) : fil « Pour toi », recherche, vidéos ouvertes ; reels d'Instagram
             "tt_q": "", "tt_onglet_r": "Top", "tt_lecture": 0, "tt_aimes": [], "tt_suivis": [], "tt_fil_vues": 0,
@@ -142,6 +160,10 @@ def goios(argv):
         elif mots[1] == "push":
             dst = racine / opts["--dstPath"].lstrip("/")
             dst.parent.mkdir(parents=True, exist_ok=True)
+            if not dst.exists():                        # un fichier réécrit garde sa date de création (1208, 26/10/2026)
+                import datetime as dt
+                e.setdefault("vlc_nes", {})[dst.name] = dt.date.today().isoformat()
+                ecrire(e)
             shutil.copyfile(opts["--srcPath"], dst)
         elif mots[1] == "tree":
             d = racine / opts["--path"].lstrip("/")
@@ -152,7 +174,10 @@ def goios(argv):
             for f in sorted(d.rglob("*")):             # comme go-ios (WalkDir) : sous-dossiers compris
                 print(f"{'|  ' * len(f.relative_to(d).parts)}|-{f.name}{'/' if f.is_dir() else ''}")
         elif mots[1] == "rm":
-            (racine / opts["--path"].lstrip("/")).unlink(missing_ok=True)
+            f = racine / opts["--path"].lstrip("/")
+            f.unlink(missing_ok=True)
+            if e.get("vlc_nes", {}).pop(f.name, None):
+                ecrire(e)
     elif cmd == "pasteboard":
         if mots[1] == "set":
             e["presse_papiers"] = sys.stdin.read()
@@ -213,9 +238,9 @@ def ig_onglets():
 def videos(e):
     """La pellicule, de la plus ancienne à la plus récente : deux vidéos personnelles (août), puis celles du service (du jour)."""
     import datetime as dt
-    jour = dt.date.today().isoformat()
+    jour, jours = dt.date.today().isoformat(), e.get("photos_jours") or {}
     return [{"nom": "perso-1.mov", "jour": "2026-08-30"}, {"nom": "perso-2.mov", "jour": "2026-08-31"}] + \
-           [{"nom": n, "jour": jour} for n in e["photos"]]
+           [{"nom": n, "jour": jours.get(n, jour)} for n in e["photos"]]
 
 
 def tt_cases(e):
@@ -259,10 +284,30 @@ def elements(e):
         return [E("Icon", "TikTok", (40, 120, 64, 64)), E("Icon", "Instagram", (130, 120, 64, 64)), E("Icon", "VLC", (220, 120, 64, 64))]
     if ec == "raccourcis":
         return [E("StaticText", "Auto importer", (20, 200, 350, 40))]
+    if ec == "autorisation" and e.get("sous_autorisation") == "raccourcis":
+        return [E("StaticText", "Auto importer", (20, 200, 350, 40))]   # par-dessus Raccourcis : hors de l'arbre (18/10/2026)
+    if ec == "autorisation":                  # la demande d'iOS, par-dessus tout (16/10/2026)
+        return [E("StaticText", "Autoriser « Auto importer » à produire 1 photo ?", (37, 100, 340, 60)),
+                E("Button", "Refuser", (23, 440, 368, 52)), E("Button", "Autoriser une fois", (23, 506, 368, 52)),
+                E("Button", "Toujours autoriser", (23, 572, 368, 52))]
+    if ec == "tt_avert":                      # par-dessus l'écran « Publier » (28/10/2026) : la description reste dessous
+        return [E("TextView", "Ajouter une description…", (16, 105, 230, 143), None, e["tt_desc"] or "Ajouter une description…"),
+                E("TextView", "La situation évolue rapidement dans ton pays. Fais attention à ce que tu publies",
+                  (76, 317, 262, 210)),
+                # le « Publier » du bas, caché sous la fenêtre, reste dans l'arbre AVANT celui de la fenêtre (arbre réel
+                # de la publication 1395, 28/10/2026) : le toucher ne fait rien
+                E("Button", "Publier", (198, 758, 180, 48)),
+                E("Button", "Annuler", (56, 547, 151, 48)), E("Button", "Publier", (207, 547, 151, 48))]
+    if ec == "tt_public":                     # par-dessus l'écran « Publier » (16/10/2026) : la description reste dessous
+        return [E("TextView", "Ajouter une description…", (16, 105, 230, 143), None, e["tt_desc"] or "Ajouter une description…"),
+                E("StaticText", "Publier la vidéo publiquement ?", (70, 330, 274, 50)),
+                E("Button", "Publier maintenant", (57, 510, 300, 46)), E("Button", "Annuler", (57, 558, 300, 46))]
     # TikTok
     if ec == "tt_intrus":                     # vu le 03/10/2026 : tant qu'elle est là, rien d'autre ne répond
         return [E("StaticText", "Mise à jour des Règles de la communauté", (64, 307, 262, 54)),
                 E("Button", "J'ai compris", (44, 512, 302, 49))]
+    if ec == "tt_shop":                       # « Rends TikTok Shop plus pertinent pour toi » (14/10/2026) : ses boutons hors de l'arbre
+        return [E("TextView", "", (32, 250, 326, 72)), E("TextView", "", (32, 338, 326, 54)), E("TextView", "", (32, 744, 326, 32))]
     if ec == "tt_fil":
         l = onglets() + [E("Button", "LIVE", (16, 57, 24, 24)), E("Button", "Suivis", (140, 47, 55, 44), "following"),
                          E("Button", "Pour toi", (272, 47, 68, 44), "top_tabs_recomend", "1"), E("Button", "Rechercher", (350, 57, 24, 24))]
@@ -322,6 +367,22 @@ def elements(e):
             return l + [E("Key", " ", (100, 722, 192, 54), "space")]
         return l + [E("Button", "Brouillons", (12, 758, 180, 48)), E("Button", "Publier", (198, 758, 180, 48))]
     # Instagram
+    if ec == "ig_pubmeta":                    # vue le 21/10/2026 : par-dessus le fil, qui reste dans l'arbre (barre d'onglets comprise)
+        return ig_onglets() + [E("Other", "Autorisez ou non le traitement de vos données à des fins publicitaires", (76, 322, 238, 137)),
+                               E("StaticText", "Dans le cadre des lois locales, vous pouvez choisir de nous autoriser ou non à traiter "
+                                 "vos données personnelles pour personnaliser vos publicités sur les Produits des entités Meta.", (76, 474, 238, 104)),
+                               E("Button", "Démarrer", (52, 630, 286, 20))]
+    if ec == "ig_comptemeta":                 # vue le 21/10/2026 : une feuille dont le bouton couvre la barre d'onglets
+        return ig_onglets() + [E("StaticText", "Votre Compte Meta est disponible", (40, 540, 310, 70)),
+                               E("Button", "Examiner le compte", (16, 760, 358, 52))]
+    if ec == "ig_nettoyage":                  # vue le 24/10/2026 : toute l'app, sans retour ni barre d'onglets
+        return [E("StaticText", "Nettoyage du compte", (120, 60, 150, 30)),
+                E("StaticText", "Supprimez l’activité récente et vérifiez que l’apparence de votre compte semble correcte", (32, 270, 330, 110)),
+                E("Cell", "Contenu, 9 publications, stories et reels seront archivés", (16, 560, 358, 60)),
+                E("Button", "Choisir le contenu à supprimer", (16, 645, 358, 43)), E("Button", "Tout supprimer", (16, 699, 358, 43))]
+    if ec == "ig_comptemeta_page":            # « Examiner le compte » touché : la page du Compte Meta
+        return [E("Button", "Retour", (10, 100, 44, 44)), E("Button", "Terminé", (300, 100, 80, 44)),
+                E("StaticText", "Votre Compte Meta est disponible", (40, 360, 310, 70))]
     if ec == "ig_fil":
         envoi = e.get("ig_envoi") or {}
         if envoi.get("etat") in ("en_cours", "bloque"):
@@ -375,13 +436,16 @@ def elements(e):
                 E("Button", "Recommencer", (45, 408, 300, 53), "camera-discard-draft"),
                 E("Button", "Enregistrer le brouillon", (45, 460, 300, 53), "camera-save-draft"),
                 E("Button", "Continuer les modifications", (45, 512, 300, 53), "camera-cancel-draft")]
-    if ec in ("ig_final", "ig_apropos"):
+    if ec in ("ig_final", "ig_apropos", "ig_volet"):
         l = [E("Other", None, (0, 0, 390, 844), "sundial-share-sheet-view-controller", touchable=False),
              E("Button", "Retour", (20, 47, 36, 44), "BackButton"),
              E("TextView", "Ajouter une légende...", (16, 409, 358, 148), "caption-cell-text-view", e["ig_desc"] or None),
              E("Cell", "Partager aussi sur…, Ma Page", (0, 641, 390, 49)),
              E("Button", "Enregistrer le brouillon", (16, 753, 171, 45), "save-draft-button"),
              E("Button", "Suivant", (203, 753, 171, 45), "share-sheet-share-button")]
+        if ec == "ig_volet":                  # vu le 18/10/2026 : par-dessus l'écran final, qui reste dans l'arbre
+            l += [E("Other", "D\u2019autres personnes peuvent désormais télécharger et partager vos reels", (16, 604, 382, 51)),
+                  E("Button", "Continuer", (16, 768, 382, 44)), E("Button", "Gérer les paramètres", (16, 822, 382, 32))]
         if ec == "ig_apropos":                # vue le 04/10/2026 : l'écran final reste dessous, dans l'arbre
             l += [E("StaticText", "À propos de Reels", (0, 154, 390, 31)), E("Button", "Partager", (16, 680, 358, 44)),
                   E("Button", "Annuler", (16, 734, 358, 32))]
@@ -451,18 +515,41 @@ def panneau_comptes(e):
     return haut, [haut + 90 + 76 * i for i in range(n)], 750
 
 
+def ordre_comptes(e):
+    """Les comptes dans l'ordre des lignes du panneau. Avec « tt_reordonne », décalé d'un cran à chaque changement de
+    compte (le vrai TikTok réordonne sa liste, vu le 18/10/2026 sur l'iPhone 2)."""
+    lc = list(e["tt_comptes"])
+    k = e.get("tt_bascules", 0) % len(lc) if e.get("tt_reordonne") and lc else 0
+    return lc[-k:] + lc[:-k] if k else lc
+
+
+def couleur_avatar(nom):                 # chaque compte a sa photo (ici, sa couleur), jamais rouge ni blanche
+    h = hashlib.md5(nom.encode()).digest()
+    return (40 + h[0] % 140, 60 + h[1] % 160, 60 + h[2] % 160)
+
+
 def toucher_panneau(e, y):
     haut, lignes, ajout = panneau_comptes(e)
+    ordre = ordre_comptes(e)
     e["journal"].append(f"tt_comptes:toucher {y:.0f}")
     if abs(y - ajout) < 38:
         e["tt_ajout_touche"] = True          # la connexion d'un compte : la recette ne doit jamais y aller
         e["ecran"] = "tt_profil"
         return
     for i, c in enumerate(lignes):
-        if abs(y - c) < 38 and e["tt_comptes"][i] != e["tt_actif"]:
-            e["tt_bascule"] = {"compte": e["tt_comptes"][i], "a": time.time() + 6}   # « chargement… » 6 s, comme le vrai
+        if abs(y - c) < 38 and ordre[i] != e["tt_actif"]:
+            e["tt_bascule"] = {"compte": ordre[i], "a": time.time() + 6}   # « chargement… » 6 s, comme le vrai
             break
     e["ecran"] = "tt_profil"                 # une ligne touchée, ou à côté : le panneau se ferme
+
+
+def publier_ou_demander(e):
+    if e.get("tt_avertissement"):            # l'avertissement « La situation évolue rapidement… » (28/10/2026)
+        e["ecran"], e["focus"] = "tt_avert", None
+    elif e.get("tt_public"):                   # la 1re vidéo d'un compte neuf : TikTok demande d'abord
+        e["ecran"], e["focus"] = "tt_public", None
+    else:
+        poster_tiktok(e)
 
 
 def poster_tiktok(e):
@@ -478,6 +565,21 @@ def cliquer(e, el):
     ec = e["ecran"]
     e["journal"].append(f"{ec}:{label if label is not None else name}")
     nom = name or label
+    if ec == "ig_pubmeta":                    # rien ne passe à travers ; « Démarrer » : un choix sur le compte de l'utilisateur
+        if label == "Démarrer":
+            e["ig_pubmeta_touche"] = True
+            e["journal"].append("piège:ig_pubmeta:Démarrer touché")
+        return
+    if ec == "ig_comptemeta":                 # l'onglet Profil, touché, tombe sur « Examiner le compte » (vu le 21/10/2026)
+        e["ecran"], e["ig_comptemeta_touche"] = "ig_comptemeta_page", True
+        e["journal"].append(f"piège:ig_comptemeta:{label if label is not None else name} touché → Examiner le compte")
+        return
+    if ec == "ig_comptemeta_page":
+        return
+    if ec == "ig_nettoyage":                  # rien ne doit jamais y être touché : ce serait effacer des reels
+        e["ig_nettoyage_touche"] = True
+        e["journal"].append(f"piège:ig_nettoyage:{label if label is not None else name} touché")
+        return
     # TikTok
     if ec == "tt_intrus" and label == "J'ai compris":
         e["ecran"] = "tt_fil"
@@ -551,7 +653,24 @@ def cliquer(e, el):
         e["tt_brouillons"][e["tt_actif"]] = e["tt_brouillons"].get(e["tt_actif"], 0) + 1
         e["ecran"] = "tt_profil"
     elif ec == "tt_poster" and label == "Publier":
+        publier_ou_demander(e)
+    elif ec == "tt_avert" and label == "Publier" and el[2][1] > 700:
+        e["journal"].append("piège:tt_avert:Publier du bas touché, sans effet")
+    elif ec == "tt_avert" and label == "Publier":
+        e["tt_avertissement"] = False
+        e["journal"].append("tt_avert:publier")
+        publier_ou_demander(e)
+    elif ec == "tt_avert" and label == "Annuler":
+        e["ecran"] = "tt_poster"
+    elif ec == "tt_public" and label == "Publier maintenant":
+        e["tt_public"] = False
+        e["journal"].append("tt_public:publier maintenant")
         poster_tiktok(e)
+    elif ec == "tt_public" and label == "Annuler":
+        e["ecran"] = "tt_poster"
+    elif ec == "autorisation":
+        e["raccourci_demande"], e["raccourci_choix"], e["ecran"] = False, label, e.get("sous_autorisation") or "accueil"
+        e["journal"].append(f"autorisation:{label}")
     elif ec == "tt_video" and label == "Partager":
         e["ecran"] = "tt_partage"
     # Instagram
@@ -622,7 +741,12 @@ def cliquer(e, el):
     elif ec == "ig_promo" and label in ("Obtenir", "Télécharger sur l’App\xa0Store"):
         e["ig_appstore_touche"] = True
     elif ec == "ig_editeur" and nom == "sundial-right-chevron-suivant-button":
-        e["ecran"], e["ig_desc"] = "ig_final", ""
+        e["ecran"], e["ig_desc"] = "ig_volet" if e.get("ig_volet") else "ig_final", ""
+    elif ec == "ig_volet" and label == "Continuer":
+        e["ig_volet"], e["ecran"] = False, "ig_final"
+        e["journal"].append("ig_volet:continuer")
+    elif ec == "ig_volet" and label == "Gérer les paramètres":
+        e["ig_volet_gerer"] = True
     elif ec == "ig_abandon" and nom == "camera-discard-draft":
         e["ecran"], e["ig_choisies"], e["ig_selection"] = "ig_galerie", [], None
     elif ec == "ig_abandon" and nom == "camera-save-draft":
@@ -698,12 +822,24 @@ def dessiner(e, fmt="JPEG", echelle=1.0):
     for typ, label, (x, y, w, h), *_ in elements(e):
         d.rectangle([x * s, y * s, (x + w) * s, (y + h) * s], outline=(100, 210, 255))
         d.text(((x + 4) * s, (y + 4) * s), f"{typ} {label}"[:40], fill=(230, 230, 230))
+    if e["ecran"] == "tt_shop":             # fond blanc, deux cartes, deux « Sélectionner » rouges (mesurés sur le vrai)
+        d.rectangle([0, 0, W * s, H * s], fill=(255, 255, 255))
+        for haut in (425, 578):
+            d.rounded_rectangle([32 * s, haut * s, 358 * s, (haut + 137) * s], radius=12 * s, fill=(247, 247, 247))
+        for y in (528, 681):
+            d.rectangle([148 * s, y * s, 242 * s, (y + 12) * s], fill=(253, 44, 84))
     if e["ecran"] == "tt_comptes":
         haut, lignes, ajout = panneau_comptes(e)
         d.rectangle([0, haut * s, W * s, H * s], fill=(255, 255, 255))
         d.text((150 * s, (haut + 20) * s), "Changer de compte", fill=(0, 0, 0))
-        for c in lignes:
-            d.ellipse([16 * s, (c - 28) * s, 72 * s, (c + 28) * s], fill=(190, 120, 60))
+        meme = e.get("tt_meme_photo") or []      # des comptes à la même photo (@mapage et @mapage2.0, 19/10/2026)
+        for nom, c in zip(ordre_comptes(e), lignes):
+            d.ellipse([16 * s, (c - 28) * s, 72 * s, (c + 28) * s], fill=couleur_avatar(meme[0] if nom in meme else nom))
+            if nom == e["tt_actif"]:     # la coche rouge du compte actif, au bout de sa ligne
+                d.line([(344 * s, c * s), (352 * s, (c + 8) * s), (368 * s, (c - 10) * s)], fill=(254, 44, 85), width=max(1, round(3 * s)))
+            elif e.get("tt_badges"):     # la pastille rouge des notifications des autres comptes (19/10/2026, iPhone 1)
+                d.rounded_rectangle([340 * s, (c - 11) * s, 366 * s, (c + 11) * s], radius=11 * s, fill=(254, 44, 85))
+                d.text((347 * s, (c - 7) * s), "3", fill=(255, 255, 255))
         d.ellipse([16 * s, (ajout - 28) * s, 72 * s, (ajout + 28) * s], fill=(235, 235, 235))
     if e["ecran"] == "tt_poster" and e.get("focus") == "tt_desc":
         d.rounded_rectangle([300 * s, 54 * s, 374 * s, 84 * s], radius=14 * s, fill=(254, 44, 85))   # la pastille « Publier »
@@ -834,6 +970,7 @@ async def servir_wda(port):
         e = lire()
         if e.get("tt_bascule") and time.time() >= e["tt_bascule"]["a"]:     # le changement de compte de TikTok aboutit
             e["tt_actif"], e["tt_bascule"] = e["tt_bascule"]["compte"], None
+            e["tt_bascules"] = e.get("tt_bascules", 0) + 1
             ecrire(e)
         envoi = e.get("ig_envoi")
         if envoi and envoi["etat"] == "en_cours":
@@ -858,7 +995,7 @@ async def servir_wda(port):
             chemin = {"swipe": "/actions", "tap": "/wda/tap", "doubleTap": "/wda/doubleTap"}[sur_elt.group(2)]
             if sur_elt.group(2) == "doubleTap":
                 corps = {"x": W / 2, "y": H / 2}
-        elif chemin in ("/actions", "/wda/tap", "/wda/doubleTap") and e["ecran"] in ("tt_fil", "tt_video"):
+        elif chemin in ("/actions", "/wda/tap", "/wda/doubleTap") and e["ecran"] in ("tt_fil", "tt_video", "tt_shop"):
             e["journal"].append(f"piège:geste {chemin} aux coordonnées sur {e['ecran']} (plus de 2 min sur le vrai TikTok)")
             ecrire(e)
         try:
@@ -906,15 +1043,29 @@ async def servir_wda(port):
                 b = TIKTOK if ec.startswith("tt_") else INSTAGRAM if ec.startswith("ig_") else \
                     {"photos": "com.apple.mobileslideshow", "raccourcis": "com.apple.shortcuts"}.get(ec, "com.apple.springboard")
                 return rep({"bundleId": b, "name": ec, "pid": 1})
-            if chemin == "/wda/homescreen":
+            if chemin == "/wda/homescreen" and e["ecran"] == "autorisation":
+                e["sous_autorisation"] = "accueil"            # la demande d'iOS reste par-dessus l'écran d'accueil
+            elif chemin == "/wda/homescreen":
                 e["ecran"] = "accueil"
+            elif chemin == "/wda/apps/launch" and e["ecran"] == "autorisation":
+                e["sous_autorisation"] = None          # l'app s'ouvre dessous : la demande d'iOS reste par-dessus
+                e["journal"].append("piège:app lancée sous la demande d'autorisation")
             elif chemin == "/wda/apps/launch":
                 b = corps["bundleId"]
                 if b == TIKTOK:
-                    e["ecran"] = "tt_intrus" if e["tt_lancements"] == 0 else "tt_fil"
+                    e["ecran"] = "tt_intrus" if e["tt_lancements"] == 0 else "tt_shop" if e.get("tt_shop") else "tt_fil"
                     e["tt_lancements"] += 1
                 elif b == INSTAGRAM:
                     e["ecran"] = "ig_fil"
+                    e["ig_lancements"] = e.get("ig_lancements", 0) + 1
+                    if e.get("ig_nettoyage"):
+                        e["ecran"] = "ig_nettoyage"
+                    for k in () if e.get("ig_nettoyage") else ("ig_pubmeta", "ig_comptemeta"):     # un écran de Meta à ce lancement ?
+                        if e.get(k):
+                            e["ecran"] = k
+                            if e[k] > 0:
+                                e[k] -= 1
+                            break
                 elif b == "com.apple.shortcuts":
                     e["ecran"] = "raccourcis"
             elif chemin == "/wda/apps/terminate":
@@ -934,11 +1085,16 @@ async def servir_wda(port):
                     e = lire()
                     if f.exists():
                         e["photos"].append(nom)
+                        # Photos date une vidéo sans date à elle de la création du fichier dans VLC (1208, 26/10/2026)
+                        if nom in e.get("vlc_nes", {}):
+                            e.setdefault("photos_jours", {})[nom] = e["vlc_nes"][nom]
                         dcim = DIR / "media" / "DCIM" / "100APPLE"   # la vraie preuve : une vidéo de plus dans la pellicule
                         dcim.mkdir(parents=True, exist_ok=True)
                         (dcim / f"IMG_{len(e['photos']):04d}.MP4").write_bytes(b"video")
                         if e.get("raccourci_efface"):  # première version : il efface lui-même la copie de VLC
                             f.unlink()             # (et, comme le vrai iPhone du 02/10, Raccourcis n'ouvre pas Photos)
+                        if e.get("raccourci_demande"):  # iPhone 2, 16/10/2026 : la vidéo est déjà là, la demande arrive
+                            e["sous_autorisation"], e["ecran"] = e["ecran"], "autorisation"
             elif chemin == "/wda/keys":
                 texte, champ = "".join(corps["value"]), e.get("focus")
                 if champ in ("tt_q", "ig_recherche") and "\n" in texte:     # Entrée : la recherche part
@@ -976,6 +1132,11 @@ async def servir_wda(port):
                     e["journal"].append("piège:profil ouvert")
                 else:
                     e["journal"].append(f"tt_video:colonne {x:.0f},{y:.0f}")
+            elif chemin == "/wda/tap" and e["ecran"] == "tt_shop":
+                choix = "personnalise" if 520 <= corps["y"] <= 548 else "generique" if 673 <= corps["y"] <= 701 else None
+                if choix:
+                    e.update(tt_shop=False, tt_shop_choix=choix, ecran="tt_fil")
+                    e["journal"].append(f"tt_shop:{choix}")
             elif chemin == "/wda/tap" and e["ecran"] == "tt_comptes":
                 toucher_panneau(e, corps["y"])
             elif chemin == "/wda/tap" and e["ecran"] == "ig_envoi" and corps["y"] < 400:
@@ -985,7 +1146,7 @@ async def servir_wda(port):
             elif chemin == "/wda/tap" and e["ecran"] == "tt_poster" and e.get("focus") == "tt_desc" \
                     and 300 <= corps["x"] <= 374 and 54 <= corps["y"] <= 84:
                 e["journal"].append("tt_poster:pastille Publier")
-                poster_tiktok(e)
+                publier_ou_demander(e)
                 e["focus"] = None
             elif chemin == "/wda/tap" and e["ecran"] == "tt_editeur" and corps["y"] < 120 and e.get("tt_son") and corps["x"] > 101 + 188 - 36:
                 e["journal"].append(f"tt_editeur:son retiré ({e['tt_son']})")   # la croix de la pastille du son

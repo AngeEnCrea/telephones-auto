@@ -2,6 +2,7 @@
 et le téléphone où chacun est connecté, la file des publications, et le déroulé de chacune (une ligne et une capture
 d'écran par étape). Heures en UTC ISO (« 2026-10-01T08:00:00Z ») : l'interface les montre à l'heure de Paris."""
 import datetime as dt
+import json
 import sqlite3
 
 import lieux
@@ -47,7 +48,15 @@ create table if not exists etapes (
   capture text                               -- fichier JPEG dans captures/<publication>/
 );
 create table if not exists reglages (cle text primary key, valeur text not null);
-create table if not exists envois (          -- une vidéo envoyée à plusieurs comptes d'un coup
+create table if not exists pages (             -- les pages de niche : un groupe de comptes (TikTok + Insta)
+  projet text not null,
+  groupe text not null,
+  niche text not null default '',              -- ce que la page publie (« cuisine »…)
+  debut text,                                  -- son jour 1 (AAAA-MM-JJ, Paris) : 1 vidéo ce jour-là, 2 le lendemain… jusqu'à 5
+  maj_le text not null,
+  primary key (projet, groupe)
+);
+create table if not exists envois (          -- une vidéo envoyée à plusieurs comptes d'un coup (bouton du centre)
   id integer primary key,
   video text not null,
   titre text not null default '',
@@ -82,6 +91,26 @@ create table if not exists seances (            -- une séance de scroll d'un wa
   journal text not null default '',           -- « HH:MM:SS message [capture] », une ligne par étape
   erreur text not null default ''
 );
+create table if not exists releves (            -- les vues des derniers posts d'un compte (sante.py, Scrape Creators)
+  id integer primary key,
+  compte_id integer not null references comptes(id),
+  jour text not null,                         -- jour de Paris (AAAA-MM-JJ) : un relevé par compte et par jour, le dernier gardé
+  releve_le text not null,
+  abonnes integer,
+  posts text not null default '[]',           -- [{id, vues, ts, desc}] des posts récents, du plus récent au plus ancien
+  erreur text not null default '',
+  unique (compte_id, jour)
+);
+create table if not exists alertes (            -- les alertes envoyées sur Discord : une par sujet, par type et par jour au plus
+  id integer primary key,
+  cle text not null,                          -- « compte:12 », « telephone:<udid> », « scrape »
+  type text not null,                         -- shadowban, zero_vue, chute, echecs, deconnecte, hors_ligne, signature, credits…
+  jour text not null,
+  niveau text not null default 'rouge',       -- rouge, orange, info
+  message text not null,
+  cree_le text not null,
+  unique (cle, type, jour)
+);
 create index if not exists chauffes_etat on chauffes (etat, compte_id);
 create index if not exists seances_chauffe on seances (chauffe_id, debut);
 """
@@ -95,6 +124,20 @@ MIGRATIONS = [
     # cette colonne, ses envois étaient les seuls à écart 0 (ceux du bouton 📤 Publier : 30 min)
     ("envois", "auto", ("alter table envois add column auto integer not null default 0",
                         "update envois set auto = 1 where ecart_min = 0")),
+    # le message Discord de la publication (salon 📤 publications), complété par son lien quand il arrive (08/10/2026)
+    ("publications", "discord", "alter table publications add column discord text not null default ''"),
+    # le warm-up rapide (13/10/2026, « un fast warm-up ce soir + cette nuit ») : des séances d'affilée jusqu'à la fin
+    ("chauffes", "rapide", "alter table chauffes add column rapide integer not null default 0"),
+    # les likes de commentaires du warm-up
+    ("seances", "likes_commentaires", "alter table seances add column likes_commentaires integer not null default 0"),
+    # les choix d'une publication pour la recette, en JSON 
+    ("publications", "options", "alter table publications add column options text not null default ''"),
+    # La corbeille ne contient que les suppressions manuelles, jamais la réserve ou les annulations du robot.
+    ("publications", "supprime_le", (
+        "alter table publications add column supprime_le text",
+        """update publications set supprime_le = fin where etat = 'annule' and repetition = 0
+             and not exists (select 1 from etapes e where e.publication_id = publications.id
+                             and (e.message like 'Mise en réserve :%' or e.message like 'Annulée : la vidéo%'))""")),
 ]
 
 
@@ -137,6 +180,16 @@ class Stock:
         r = self._1("select valeur from reglages where cle = ?", cle)
         return r["valeur"] if r else defaut
 
+    def reglages_prefixe(self, prefixe):
+        return {r["cle"]: r["valeur"] for r in self._l("select cle, valeur from reglages where cle like ?", prefixe + "%")}
+
+    def legendes_en_file(self, projet, plateforme, legende):
+        """Les publications pas encore parties d'un projet sur une plateforme prennent cette légende ; rend leur nombre."""
+        cur = self.db.execute("""update publications set legende = ? where etat = 'en_attente'
+                                 and compte_id in (select id from comptes where projet = ? and plateforme = ?)""",
+                              (legende, projet, plateforme))
+        return cur.rowcount
+
     def poser_reglage(self, cle, valeur):
         self.db.execute("insert into reglages (cle, valeur) values (?, ?) on conflict (cle) do update set valeur = excluded.valeur",
                         (cle, str(valeur)))
@@ -158,6 +211,20 @@ class Stock:
                               (plateforme, identifiant, udid or None, client.strip(), note.strip(), projet.strip(),
                                groupe.strip(), maintenant()))
         return self.compte(cur.lastrowid)
+
+    def pages(self, projet=None):
+        if projet is None:
+            return self._l("select * from pages order by projet, groupe")
+        return self._l("select * from pages where projet = ? order by groupe", projet)
+
+    def page(self, projet, groupe):
+        return self._1("select * from pages where projet = ? and groupe = ?", projet, groupe)
+
+    def poser_page(self, projet, groupe, niche, debut):
+        self.db.execute("""insert into pages (projet, groupe, niche, debut, maj_le) values (?, ?, ?, ?, ?)
+                           on conflict (projet, groupe) do update set niche = excluded.niche, debut = excluded.debut,
+                             maj_le = excluded.maj_le""", (projet, groupe, niche, debut or None, maintenant()))
+        return self.page(projet, groupe)
 
     def comptes_du_projet(self, projet):
         return self._l("select * from comptes where projet = ? and actif = 1 order by groupe, plateforme, identifiant", projet)
@@ -188,16 +255,25 @@ class Stock:
     def projets_des_comptes(self):
         return [r["projet"] for r in self._l("select distinct projet from comptes where actif = 1 and projet is not null and projet != ''")]
 
+    def corbeille(self, projet):
+        return self._l("""select p.*, c.plateforme, c.identifiant, c.groupe, c.projet,
+                                 (select q.etat from publications q where q.compte_id = p.compte_id and q.video = p.video
+                                    and q.id != p.id and q.repetition = 0 and q.etat in ('en_attente', 'en_cours', 'publie')
+                                    order by (q.etat = 'publie') desc, q.id desc limit 1) as deja
+                          from publications p join comptes c on c.id = p.compte_id
+                          where p.etat = 'annule' and p.supprime_le is not null and p.repetition = 0 and c.projet = ?
+                          order by p.supprime_le desc, p.id desc""", projet)
+
     def publication(self, pid):
         return self._1("""select p.*, c.plateforme, c.identifiant, c.udid from publications p join comptes c on c.id = p.compte_id
                           where p.id = ?""", pid)
 
-    def creer_publication(self, compte_id, video, titre="", legende="", quand=None, repetition=False, envoi_id=None):
+    def creer_publication(self, compte_id, video, titre="", legende="", quand=None, repetition=False, envoi_id=None, options=""):
         if not self.compte(compte_id):
             raise ValueError("compte inconnu")
-        cur = self.db.execute("""insert into publications (compte_id, video, titre, legende, quand, repetition, envoi_id, cree_le)
-                                 values (?, ?, ?, ?, ?, ?, ?, ?)""",
-                              (compte_id, video, titre, legende, quand or None, 1 if repetition else 0, envoi_id, maintenant()))
+        cur = self.db.execute("""insert into publications (compte_id, video, titre, legende, quand, repetition, envoi_id, cree_le, options)
+                                 values (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (compte_id, video, titre, legende, quand or None, 1 if repetition else 0, envoi_id, maintenant(), options))
         return self.publication(cur.lastrowid)
 
     def creer_envoi(self, video, titre, ecart_min, auto=False):
@@ -212,10 +288,27 @@ class Stock:
                           where p.envoi_id = ? order by p.id""", eid)
 
     def publications_des_comptes(self, ids):
-        """L'état et l'heure prévue des publications de ces comptes (les créneaux déjà pris, programmation.py)."""
+        """L'état, l'heure prévue et la vidéo des publications de ces comptes (les créneaux déjà pris, programmation.py ;
+        ce qu'une page a déjà, /api/pages)."""
         if not ids:
             return []
-        return self._l(f"select etat, quand from publications where compte_id in ({', '.join('?' * len(ids))})", *ids)
+        return self._l(f"select id, compte_id, etat, quand, video from publications where compte_id in ({', '.join('?' * len(ids))})", *ids)
+
+    def file_des_comptes(self, ids):
+        """Les vraies publications en file de ces comptes (ni répétition ni reel d'essai), la plus proche d'abord : la
+        profondeur de la file d'une page, ce qui la dépasse, et la remplaçante d'une vidéo pas publiable (programmation.py)."""
+        if not ids:
+            return []
+        # « relancee » : relancée ou reportée exprès (relance automatique, agent réparateur, retouche, calendrier) : elle
+        # reste en file quand la page en a trop (programmation.en_trop)
+        return self._l(f"""select p.id, p.compte_id, p.video, p.titre, p.quand, p.envoi_id, p.etape, p.options, e.auto,
+                                  exists (select 1 from etapes x where x.publication_id = p.id and (x.message like 'Relance automatique%'
+                                          or x.message like 'Relancée par l''agent réparateur%' or x.message like 'En retouche%'
+                                          or x.message like 'Ratée, remise en file%' or x.message like 'Restaurée depuis la corbeille%')) as relancee
+                           from publications p left join envois e on e.id = p.envoi_id
+                           where p.compte_id in ({', '.join('?' * len(ids))}) and p.etat = 'en_attente' and p.repetition = 0
+                             and p.options not like '%"essai": true%'
+                           order by coalesce(p.quand, p.cree_le), p.id""", *ids)
 
     def publications_de_video(self, video):
         """Toutes les publications d'une vidéo, la plus récente d'abord."""
@@ -230,7 +323,7 @@ class Stock:
 
     def prochaine(self, udid, intervalle_min=30):
         """La prochaine publication due sur ce téléphone. Un compte qui a publié il y a moins de `intervalle_min`
-        minutes attend son tour (rythme normal, pas de rafale) ; un compte en warm-up « publications bloquées » attend
+        minutes attend son tour (rythme normal, pas de rafale), sauf un reel d'essai ; un compte en warm-up « publications bloquées » attend
         la fin du warm-up (une répétition passe : elle ne publie rien)."""
         dues = self._l("""select p.* from publications p join comptes c on c.id = p.compte_id
                           where p.etat = 'en_attente' and c.udid = ? and c.actif = 1 and (p.quand is null or p.quand <= ?)
@@ -238,7 +331,8 @@ class Stock:
                                                                  and ch.etat = 'en_cours' and ch.bloque = 1))
                           order by coalesce(p.quand, p.cree_le), p.id""", udid, maintenant())
         for p in dues:
-            if p["repetition"] or not self._1("""select 1 from publications where compte_id = ? and etat = 'publie' and fin > ?""",
+            # un reel d'essai n'attend pas les 30 min : des versions partent à la suite sur un même créneau (25/10/2026)
+            if p["repetition"] or '"essai": true' in (p.get("options") or "") or not self._1("""select 1 from publications where compte_id = ? and etat = 'publie' and fin > ?""",
                                               p["compte_id"], il_y_a(intervalle_min)):
                 return p
         return None
@@ -253,11 +347,12 @@ class Stock:
         return r["q"] if r else None
 
     # ── warm-up (chauffe.py) ───────────────────────────────────────────────────────────────────────────
-    def creer_chauffe(self, compte_id, mots, jours, minutes_jour, likes, abonnements, bloque, debut, fin):
-        cur = self.db.execute("""insert into chauffes (compte_id, mots, jours, minutes_jour, likes, abonnements, bloque, debut, fin, cree_le)
-                                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+    def creer_chauffe(self, compte_id, mots, jours, minutes_jour, likes, abonnements, bloque, debut, fin, rapide=False):
+        cur = self.db.execute("""insert into chauffes (compte_id, mots, jours, minutes_jour, likes, abonnements, bloque, debut, fin,
+                                                       cree_le, rapide)
+                                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                               (compte_id, mots, jours, minutes_jour, 1 if likes else 0, 1 if abonnements else 0,
-                               1 if bloque else 0, debut, fin, maintenant()))
+                               1 if bloque else 0, debut, fin, maintenant(), 1 if rapide else 0))
         return self.chauffe(cur.lastrowid)
 
     def chauffe(self, cid):
@@ -306,6 +401,49 @@ class Stock:
         self.db.execute("delete from seances where chauffe_id = ?", (cid,))
         self.db.execute("delete from chauffes where id = ? and etat != 'en_cours'", (cid,))
         return ids
+
+    # ── santé des comptes et alertes (sante.py, vigie.py, salons.py) ───────────────────────────────────
+    def noter_alerte(self, cle, type_, niveau, message, jour):
+        """Note une alerte ; rend True si elle est nouvelle (pas déjà envoyée ce jour-là pour ce sujet et ce type)."""
+        try:
+            self.db.execute("insert into alertes (cle, type, jour, niveau, message, cree_le) values (?, ?, ?, ?, ?, ?)",
+                            (cle, type_, jour, niveau, message, maintenant()))
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def alertes_recentes(self, depuis):
+        return self._l("select * from alertes where cree_le >= ? order by cree_le desc limit 200", depuis)
+
+    def noter_releve(self, compte_id, jour, abonnes, posts, erreur=""):
+        """Le relevé du jour d'un compte (le dernier gagne) ; un relevé raté garde les vues du précédent, avec l'erreur."""
+        self.db.execute("""insert into releves (compte_id, jour, releve_le, abonnes, posts, erreur) values (?, ?, ?, ?, ?, ?)
+                           on conflict (compte_id, jour) do update set
+                             releve_le = case when excluded.erreur = '' then excluded.releve_le else releves.releve_le end,
+                             abonnes = coalesce(excluded.abonnes, releves.abonnes),
+                             posts = case when excluded.erreur = '' then excluded.posts else releves.posts end,
+                             erreur = excluded.erreur""",
+                        (compte_id, jour, maintenant(), abonnes, json.dumps(posts, ensure_ascii=False), erreur))
+
+    def releves(self, compte_id, depuis_jour):
+        l = self._l("select * from releves where compte_id = ? and jour >= ? order by jour", compte_id, depuis_jour)
+        for r in l:
+            r["posts"] = json.loads(r["posts"] or "[]")
+        return l
+
+    def dernieres_publications(self, compte_id, n=5):
+        """Les n dernières VRAIES publications jouées d'un compte (publiées ou ratées), la plus récente d'abord."""
+        return self._l("""select * from publications where compte_id = ? and repetition = 0 and etat in ('publie', 'echec')
+                          order by coalesce(fin, debut, cree_le) desc limit ?""", compte_id, n)
+
+    def prevues(self, compte_id):
+        """Les vraies publications en file d'un compte, la plus proche d'abord (le hub)."""
+        return self._l("""select id, quand from publications where compte_id = ? and etat = 'en_attente' and repetition = 0
+                          order by coalesce(quand, cree_le)""", compte_id)
+
+    def publications_du_jour(self, debut_utc):
+        return self._l("""select p.*, c.plateforme, c.identifiant, c.groupe from publications p join comptes c on c.id = p.compte_id
+                          where p.repetition = 0 and coalesce(p.fin, p.debut, p.quand, p.cree_le) >= ?""", debut_utc)
 
     def seances_interrompues(self):
         """Au démarrage : une séance restée « en cours » (service coupé net) est notée coupée."""

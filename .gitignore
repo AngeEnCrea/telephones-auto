@@ -5,7 +5,8 @@ videos/
 *.p12
 *.mobileprovision
 *.ipa
-scrapecreators.env
+*.env
+secrets/
 .venv/
 .venv-pmd3/
 __pycache__/

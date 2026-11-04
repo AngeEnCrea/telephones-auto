@@ -33,15 +33,27 @@ log = logging.getLogger("chauffe")
 PARIS = ZoneInfo("Europe/Paris")
 JOURNEE = (9 * 60, 23 * 60)          # les séances tombent entre 9 h et 23 h, heure de Paris
 MINUTES_SEANCE = 13                  # une séance dure environ 13 min (40 min par jour : 3 séances)
-LIKES_JOUR, ABONNEMENTS_JOUR = 12, 3
-ABONNEMENTS_SEANCE = 2
+LIKES_JOUR = 12
+# abonnements : relevés le 14/10/2026
+ABONNEMENTS_JOUR, ABONNEMENTS_SEANCE = 10, 3
 MARGE_PUBLICATION_S = 120            # une séance s'arrête 2 min avant la publication suivante
 PLACE_MIN_S = 6 * 60                 # pas de séance si la prochaine publication tombe dans moins de 6 min (+ la marge)
 ESSAIS_PAR_TRANCHE = 3
 MO_PAR_MINUTE = 12                   # vidéo TikTok ou Reels en 5G : ~0,7 Go par heure (estimation affichée)
 ECHELLE = float(os.environ.get("TELEPHONES_CHAUFFE_ECHELLE") or 1)   # les essais accélèrent le temps (0,02 : 13 min → 16 s)
 P_LIKE = float(os.environ.get("TELEPHONES_CHAUFFE_P_LIKE") or 0.3)      # chances de liker une vidéo de la niche regardée
-P_SUIVRE = float(os.environ.get("TELEPHONES_CHAUFFE_P_SUIVRE") or 0.12)  # … de s'abonner à son compte (les essais : 1)
+P_SUIVRE = float(os.environ.get("TELEPHONES_CHAUFFE_P_SUIVRE") or 0.2)  # … de s'abonner à son compte (les essais : 1)
+# Le warm-up rapide :
+# pas de journée 9 h – 23 h ni de dose par jour, des séances d'affilée de maintenant jusqu'à l'heure de fin (la nuit
+# comprise), une petite pause entre deux séances d'un même compte ; plusieurs comptes d'un même téléphone se passent la
+# main (la plus en retard d'abord). Likes dès la 2e séance, abonnements dès la 3e, et les plafonds (12 likes, 3
+# abonnements) valent pour tout le warm-up rapide, pas par jour. Toujours jamais de commentaire ni de message.
+# likes de commentaires : comme les likes, dès le 2e jour
+# (la 2e séance en rapide), sur la niche seulement, quelques-uns par séance ; jamais un commentaire écrit
+LIKES_COMMENTAIRES_JOUR, LIKES_COMMENTAIRES_SEANCE = 15, 4
+P_COMMENTAIRES = float(os.environ.get("TELEPHONES_CHAUFFE_P_COMMENTAIRES") or 0.25)
+RAPIDE_PAUSE_MIN = 4                 # entre deux séances d'un même compte
+RAPIDE_FENETRE_MIN = 120             # une séance reste « due » 2 h (le téléphone sert les autres comptes entre-temps)
 
 
 def utc(iso_):
@@ -81,6 +93,22 @@ def minutes_du_jour(ch, j):
     return ch["minutes_jour"] * (0.5 + 0.5 * min(1.0, j / mi))
 
 
+def plan_rapide(ch):
+    """Les séances d'un warm-up rapide, de son début à sa fin (UTC) : [{rang, debut, fin_tranche, minutes}], toujours
+    les mêmes pour ce warm-up (un redémarrage ne rebat rien)."""
+    hasard = random.Random(f"{ch['id']}-rapide")
+    t, fin, out, k = utc(ch["debut"]), utc(ch["fin"]), [], 0
+    while True:
+        minutes = MINUTES_SEANCE * hasard.uniform(0.85, 1.15)
+        if t + dt.timedelta(minutes=minutes) > fin:
+            break
+        out.append({"rang": k, "debut": iso(t), "minutes": round(minutes, 1),
+                    "fin_tranche": iso(min(fin, t + dt.timedelta(minutes=RAPIDE_FENETRE_MIN)))})
+        t += dt.timedelta(minutes=minutes + RAPIDE_PAUSE_MIN * hasard.uniform(0.8, 1.4))
+        k += 1
+    return out
+
+
 def plan_du_jour(ch, jour):
     """Les séances prévues ce jour-là, [{rang, debut, fin_tranche, minutes}] (UTC) : une par tranche de la journée, à
     une heure tirée au hasard, toujours la même pour ce warm-up et ce jour (un redémarrage ne rebat rien)."""
@@ -108,9 +136,12 @@ def etat_du_plan(stock, ch, maintenant_=None):
     echec}], et les séances du jour."""
     maintenant_ = maintenant_ or dt.datetime.now(dt.timezone.utc)
     jour = jour_paris(maintenant_)
-    seances = stock.seances(ch["id"], depuis=iso(debut_du_jour(jour)))
+    if ch.get("rapide"):
+        seances, plan = stock.seances(ch["id"], depuis=ch["debut"], limite=1000), plan_rapide(ch)
+    else:
+        seances, plan = stock.seances(ch["id"], depuis=iso(debut_du_jour(jour))), plan_du_jour(ch, jour)
     out = []
-    for s in plan_du_jour(ch, jour):
+    for s in plan:
         miennes = [x for x in seances if x["rang"] == s["rang"]]
         faites = sum(x["minutes_faites"] for x in miennes)
         if any(x["etat"] == "en_cours" for x in miennes):
@@ -129,9 +160,17 @@ def etat_du_plan(stock, ch, maintenant_=None):
     return out, seances
 
 
+def en_pause(stock):
+    """Le bouton « ⏸ Pause » de la page warm-up : plus
+    aucune séance ne part et celle en cours s'arrête ; les publications, elles, continuent."""
+    return stock.reglage("pause_warmup", "0") == "1"
+
+
 def a_lancer(stock, udid, maintenant_=None):
     """La séance à lancer maintenant sur ce téléphone, (warm-up, rang, minutes), ou None : la plus en retard des séances
     dues, s'il y a la place avant la prochaine publication."""
+    if en_pause(stock):
+        return None
     maintenant_ = maintenant_ or dt.datetime.now(dt.timezone.utc)
     prochaine = stock.prochaine_heure(udid)
     place = (utc(prochaine) - maintenant_).total_seconds() if prochaine else 1e9
@@ -149,7 +188,16 @@ def a_lancer(stock, udid, maintenant_=None):
                     candidats.append((s["debut"], ch, s["rang"], reste))
     if not candidats:
         return None
-    _, ch, rang, minutes = min(candidats, key=lambda c: c[0])
+    # chacun son tour (14/10/2026 : 5 comptes sur un iPhone, la plus en retard seule avait servi 12 séances à l'un et 7 à
+    # l'autre) : d'abord le compte qui a le moins scrollé (aujourd'hui, ou depuis le début pour un rapide), puis la plus
+    # en retard
+    jour = iso(debut_du_jour(jour_paris(maintenant_)))
+    fait = {}
+    for _, ch, _, _ in candidats:
+        if ch["id"] not in fait:
+            fait[ch["id"]] = sum(x["minutes_faites"] for x in stock.seances(ch["id"], depuis=ch["debut"] if ch.get("rapide") else jour,
+                                                                             limite=1000))
+    _, ch, rang, minutes = min(candidats, key=lambda c: (fait[c[1]["id"]], c[0]))
     return ch, rang, minutes
 
 
@@ -164,7 +212,12 @@ class Seance:
         jour = jour_paris(maintenant_)
         self.j = rang_du_jour(ch, jour)
         du_jour = [x for x in publieur.stock.seances(ch["id"], depuis=iso(debut_du_jour(jour))) if x["id"] != seance["id"]]
+        if ch.get("rapide"):     # rapide : la « journée », c'est tout le warm-up ; le rang, celui de la séance
+            du_jour = [x for x in publieur.stock.seances(ch["id"], depuis=ch["debut"], limite=1000) if x["id"] != seance["id"]]
+            self.j = len(du_jour)
         self.likes_jour = sum(x["likes"] for x in du_jour)
+        self.likes_com_jour = sum(x.get("likes_commentaires") or 0 for x in du_jour)
+        self.likes_com = 0
         self.abonnements_jour = sum(x["abonnements"] for x in du_jour)
         self.mots = mots_de(ch)
         deja = len(publieur.stock.seances(ch["id"])) - 1   # chaque séance part d'un autre mot-clé (la 1re : le 1er)
@@ -193,6 +246,8 @@ class Seance:
             self._verif = time.monotonic() + 5 * ECHELLE
             if self.publieur.pause:
                 self.coupee_par = "file des publications mise en pause"
+            elif en_pause(self.publieur.stock):
+                self.coupee_par = "warm-ups mis en pause"
             elif (self.publieur.stock.chauffe(self.ch["id"]) or {}).get("etat") != "en_cours":
                 self.coupee_par = "warm-up arrêté"
             else:
@@ -229,6 +284,14 @@ class Seance:
         """Liker cette vidéo de la niche ? Seulement une regardée un moment (8 s ou plus), et pas toutes."""
         return self.peut_liker() and secondes >= 8 and random.random() < P_LIKE
 
+    def envie_de_liker_commentaires(self, secondes):
+        """Ouvrir les commentaires de cette vidéo de la niche pour en aimer un ou deux ? Une regardée un moment, pas toutes."""
+        return (bool(self.ch["likes"]) and self.j >= 1 and secondes >= 8 and self.likes_com < LIKES_COMMENTAIRES_SEANCE
+                and self.likes_com_jour + self.likes_com < LIKES_COMMENTAIRES_JOUR and random.random() < P_COMMENTAIRES)
+
+    def peut_liker_commentaire(self):
+        return self.likes_com < LIKES_COMMENTAIRES_SEANCE and self.likes_com_jour + self.likes_com < LIKES_COMMENTAIRES_JOUR
+
     def envie_de_suivre(self):
         return self.peut_suivre() and random.random() < P_SUIVRE
 
@@ -244,8 +307,26 @@ class Seance:
         self.cherches.append(mot)
 
     def resume(self):
-        return (f"{self.vues} vidéo(s) vue(s), {self.likes} like(s), {self.abonnements} abonnement(s), "
-                f"{self.recherches} recherche(s)")
+        return (f"{self.vues} vidéo(s) vue(s), {self.likes} like(s), {self.likes_com} like(s) de commentaires, "
+                f"{self.abonnements} abonnement(s), {self.recherches} recherche(s)")
+
+
+def annoncer(publieur, ch, ctx, s):
+    """Le résumé de la séance sur 🔥 warm-up (Discord, salons.py) ; le projet principal seulement (26/10/2026)."""
+    import salons
+    import sante
+    compte = publieur.stock.compte(ch["compte_id"])
+    if compte and not sante.du_projet(publieur.stock, compte):
+        return
+    etat = {"faite": "🔥", "coupee": "✂️", "echec": "❌"}.get(s["etat"], "🔥")
+    quand = f"séance {ctx.j + 1} (rapide)" if ch.get("rapide") else f"jour {ctx.j + 1}/{ch['jours']}"
+    texte = (f"{etat} {salons.ligne_compte(ch['plateforme'], ch['identifiant'], ch['groupe'])} · {quand}"
+             f" · {s['minutes_faites']:g} min · {s['vues']} vidéo(s)" + (f" · {s['likes']} ❤️" if s["likes"] else "")
+             + (f" · {s['abonnements']} ➕" if s["abonnements"] else "")
+             + (f" · {s.get('likes_commentaires')} 💬❤️" if s.get("likes_commentaires") else "") + (f" · 🔎 {s['mots']}" if s["mots"] else ""))
+    if s["etat"] in ("echec", "coupee") and s["erreur"]:
+        texte += f"\n{'Ratée' if s['etat'] == 'echec' else 'Coupée'} : {s['erreur'][:300]}"
+    publieur.discord.envoyer("WARMUP", texte)
 
 
 async def jouer(publieur, t, ch, rang, minutes):
@@ -276,7 +357,12 @@ async def jouer(publieur, t, ch, rang, minutes):
             finally:
                 stock.maj_seance(s["id"], fin=maintenant(), minutes_faites=round(ctx.ecoule() / 60 / ECHELLE, 1),
                                  vues=ctx.vues, likes=ctx.likes, abonnements=ctx.abonnements, recherches=ctx.recherches,
+                                 likes_commentaires=ctx.likes_com,
                                  mots=", ".join(ctx.cherches))
+                try:
+                    annoncer(publieur, ch, ctx, stock.seance(s["id"]))
+                except Exception:
+                    log.exception("warm-up, résumé Discord de la séance %s", s["id"])
                 try:                      # l'app fermée : plus rien ne se charge en 5G ; l'iPhone sur l'écran d'accueil
                     await t.agent.fermer(APPS[ch["plateforme"]])
                 except Exception:

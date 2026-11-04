@@ -53,6 +53,32 @@ Onglet Publications › « Programmation automatique » : case **Activée**, et 
 - **Publier seulement en Wi-Fi** (case) : sans Wi-Fi, les publications attendent au lieu d'échouer (utile si l'iPhone
   n'a pas de forfait de données ; à décocher s'il en a un).
 
+## Le hub
+
+En tête de la page **📅 Calendrier** : un tableau de bord par projet.
+
+- une tuile par page : ses vues, ses abonnés, ses alertes ; l'état des téléphones et de l'agent ; les crédits ;
+- **Vues des pages** : les vues gagnées jour par jour et semaine par semaine ;
+- les règles de santé, compte par compte : shadowban probable (médiane sous 30 vues sur au moins 3 posts de 24 h à 7
+  jours), zéro vue, chute des vues, 2 échecs d'affilée, compte déconnecté.
+
+Il faut une clé Scrape Creators pour les vues, et des webhooks Discord pour recevoir les alertes
+([`INSTALLATION.md`](INSTALLATION.md)). Sans eux, la vigie des téléphones et les échecs restent visibles ici.
+
+## Les pages et le rythme
+
+Une **page** est un groupe de comptes (le TikTok et l'Insta d'une même marque, par exemple) avec une **niche** et un
+**jour 1**, réglés par `POST /telephones/api/pages`. Claude Code peut le faire pour toi : « règle la page Groupe 1 ».
+
+- **Montée en charge** : 1 vidéo le jour 1, 2 le jour 2… jusqu'à 5 par jour (réglage `dose`). TikTok et Insta d'une même
+  vidéo comptent pour une.
+- **La file** garde 3 jours d'avance par compte ; le reste attend dans le dossier, sans perdre sa place.
+- **Une vidéo retirée du dossier** est annulée partout, sans échec ; son créneau redevient libre.
+- **L'objectif** (`objectifs` de `POST /telephones/api/programmation`) : un total de publications par jour pour un projet ;
+  ce qui manque à la dose normale part en renfort sur les pages déjà pleines. Ne le pousse pas sur des comptes jeunes.
+- **Plusieurs iPhone** : chaque compte est rattaché au sien, et chaque iPhone travaille de son côté. **Plusieurs
+  projets** sur un même iPhone ne se gênent pas : le second se place dans les trous de la grille du premier.
+
 ## Le calendrier
 
 Une semaine, un jour par colonne ; chaque vidéo avec son heure, son groupe et l'état de chaque réseau (⏳ prévue,
@@ -63,16 +89,29 @@ Une semaine, un jour par colonne ; chaque vidéo avec son heure, son groupe et l
 - **Annuler** (le créneau redevient libre) ;
 - **Pas en ligne ✕** (notée publiée mais rien sur le compte : elle passe en ratée, à reprogrammer).
 
+Et aussi : **🗑** sur une publication prévue (elle va à la **corbeille**, d'où on la restaure), **▶ Publier maintenant**, la
+colonne **À programmer** (les vidéos à la racine de `videos/`, à poser sur un créneau libre), les **reels d'essai**
+d'Instagram et le partage sur Facebook, projet par projet.
+
 ## Le warm-up des comptes
 
 Page **🔥 Warm-up**. Un compte neuf qui publie tout de suite est souvent peu montré : le warm-up le fait d'abord
 « vivre » quelques jours dans sa niche.
 
-1. Coche un ou plusieurs comptes (connectés à l'iPhone, déclarés dans l'onglet Comptes).
+1. **Rafraîchir les comptes** : chaque iPhone lit ses comptes TikTok et Insta et ajoute ceux qui manquent. Coche-en un
+   ou plusieurs.
 2. Les **mots-clés de la niche**, un par ligne (ce que le compte va chercher puis regarder).
 3. La **durée** (7 jours par défaut) et les **minutes par jour** (40 par défaut : 3 séances d'environ 13 min).
-4. Les cases : liker (dès le 2e jour, 12 par jour au plus, seulement des vidéos de la niche), s'abonner (dès le 3e
-   jour, 3 par jour au plus), **bloquer les publications** du compte pendant le warm-up (au choix).
+4. Les cases : liker (dès le 2e jour, 12 par jour au plus, seulement des vidéos de la niche ; sur Instagram aussi quelques
+   commentaires du haut, 15 par jour au plus), s'abonner (dès le 3e jour, 10 par jour et 3 par séance au plus),
+   **bloquer les publications** du compte pendant le warm-up (au choix).
+
+**Plusieurs comptes** sur un iPhone passent chacun leur tour (celui qui a le moins scrollé d'abord). **⏸ Pause** arrête
+tous les warm-ups sans toucher aux publications.
+
+**⚡ Warm-up rapide** : pas de dose par jour, des séances d'affilée jusqu'à l'heure de fin, la nuit comprise, pour un compte
+à lancer vite. Les plafonds valent alors pour tout le warm-up, pas par jour. C'est moins naturel qu'un warm-up de
+7 jours : à garder pour un besoin précis.
 
 Chaque jour, les séances tombent à des heures tirées au hasard entre 9 h et 23 h, toujours entre deux publications
 (une publication passe avant : une séance s'arrête 2 min avant). Une séance : un mot-clé cherché, les vidéos de la
