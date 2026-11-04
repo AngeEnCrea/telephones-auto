@@ -223,6 +223,30 @@ class Robot:
         return texte
 
 
+class RobotInventaire(Robot):
+    """Le robot de l'inventaire des comptes (bouton « Rafraîchir » du warm-up, 13/10/2026) : mêmes gestes, son journal
+    est une liste de lignes gardée en mémoire (inventaire.py), une capture par étape dans son dossier."""
+
+    def __init__(self, tel, dossier, journal):
+        super().__init__(tel, {"id": 0, "repetition": 0}, None, dossier)
+        self.journal, self.n = journal, 0
+
+    async def etape(self, message, capture=True):
+        nom = None
+        if capture:
+            try:
+                self.n += 1
+                nom = f"{self.n:02d}.jpg"
+                (self.dossier / nom).write_bytes(jpeg_reduit(await self.a.capture()))
+            except Exception as e:
+                log.warning("capture impossible : %s", e)
+        self.journal.append(f"{dt.datetime.now(PARIS).strftime('%H:%M:%S')} {message}")
+        log.info("inventaire des comptes (%s) : %s", self.t.nom, message)
+
+    async def alertes_refusees(self):
+        return await self.alertes(tout_refuser=True)
+
+
 class RobotSeance(Robot):
     """Le robot d'une séance de warm-up (chauffe.py) : mêmes gestes, mais son journal est celui de la séance (une
     ligne par étape, une capture aux étapes clés, pas à chaque vidéo)."""

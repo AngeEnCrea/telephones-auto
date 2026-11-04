@@ -207,10 +207,22 @@ async def pousser(udid, app, source, destination):
                  udid=udid, delai=900)
 
 
-async def lister(udid, app, chemin):
+async def lister(udid, app, chemin, essais=3, delai=30):
     """Les noms des fichiers (pas des dossiers) sous `chemin`, sous-dossiers compris ; None si le dossier n'existe
-    pas. `app` None : le dossier Media de l'iPhone (la pellicule est dans /DCIM)."""
-    code, out, _ = await ios("fsync", *([f"--app={app}"] if app else []), "tree", f"--path={chemin}", udid=udid, delai=60)
+    pas. `app` None : le dossier Media de l'iPhone (la pellicule est dans /DCIM).
+    La lecture prend 1 s, mais elle reste parfois bloquée (6 reels ratés du 20 au 23/10/2026 sur « fsync tree
+    --path=/DCIM : pas de réponse en 60 s », dont la 1208 juste après que les deux iPhone ont été rebranchés) :
+    une lecture qui ne répond pas est refaite, `essais` fois en tout."""
+    for essai in range(1, essais + 1):
+        try:
+            code, out, _ = await ios("fsync", *([f"--app={app}"] if app else []), "tree", f"--path={chemin}",
+                                     udid=udid, delai=delai)
+            break
+        except ErreurIos as e:
+            if essai == essais:
+                raise
+            log.warning("fsync tree %s : %s, nouvel essai (%d/%d)", chemin, e, essai + 1, essais)
+            await asyncio.sleep(3)
     if code != 0:
         return None
     noms = []

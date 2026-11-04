@@ -46,6 +46,18 @@
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
   .actions .btn{font-size:12px;padding:6px 10px}
   .vide-l{color:var(--ink-4);font-size:13px;padding:8px 2px}
+  .tete-c{display:flex;align-items:center;gap:8px;margin:12px 0 5px}
+  .tete-c label{margin:0}
+  .tete-c .btn{font-size:12px;padding:4px 9px;margin-left:auto}
+  .inv{font-size:12px;color:var(--ink-3);margin:0 0 6px;line-height:1.45}
+  .inv .ok{color:var(--ok)} .inv .err{color:var(--urgent)}
+  .rapide{margin-top:12px;padding:10px 12px;border:1px solid rgba(255,214,10,.35);border-radius:var(--r-sm);background:var(--surface-2)}
+  .rapide label.case{margin:0}
+  .rapide .ligne{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:13px;color:var(--ink-2)}
+  .rapide input[type=time]{width:110px}
+  .chip.rapide{background:rgba(255,214,10,.15);color:var(--warn)}
+  .en-pause{margin:10px 22px 0;padding:10px 14px;border-radius:var(--r-sm);background:rgba(255,214,10,.12);border:1px solid rgba(255,214,10,.4);color:var(--warn);font-size:13px}
+  #b-pause.prim{background:var(--warn);color:#000}
   .fiche-w{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:20;padding:16px}
   .fiche-w[hidden]{display:none}
   .fiche-w .boite{background:var(--bg-2);border:1px solid var(--line-2);border-radius:var(--r-md);padding:18px;width:min(560px,100%);max-height:90vh;overflow:auto}
@@ -68,26 +80,35 @@
   <a class="retour" href="./">← Téléphones</a>
   <h1>🔥 Warm-up</h1>
   <div class="grow"></div>
+  <button class="btn" id="b-pause" title="Met tous les warm-ups en pause (la séance en cours s'arrête) : le téléphone est libre pour toi. Les publications continuent.">⏸ Pause</button>
   <a class="btn" href="calendrier">📅 Calendrier</a>
   <a class="btn" href="./">📱 Téléphones</a>
 </header>
+<div class="en-pause" id="en-pause" hidden>⏸ Warm-ups en pause : aucune séance ne part, le téléphone est libre. Les publications continuent (pour tout arrêter : pause de la file dans Téléphones).</div>
 <div class="wu-info" id="info"></div>
 <main class="wu">
   <section>
     <form id="f-new" class="bloc">
       <h2>Mettre des comptes en warm-up</h2>
-      <label>Comptes</label>
+      <div class="tete-c"><label>Comptes</label><button type="button" class="btn" id="b-rafraichir" title="Chaque iPhone branché lit les comptes connectés à TikTok et Instagram et ajoute ceux qui manquent (dès qu'il est libre : une publication passe avant)">🔄 Rafraîchir les comptes</button></div>
+      <div class="inv" id="inv"></div>
       <div class="comptes" id="f-comptes"></div>
+      <div id="f-projet-l" hidden><label for="f-projet">Projet des comptes neufs (après le warm-up)</label><select class="in" id="f-projet" name="projet"></select>
+        <div class="note" style="margin-top:4px">Chacun reçoit un groupe neuf (« Compte 3 »…) ; le TikTok et l'Insta de même nom vont ensemble. Ils publient à la fin du warm-up.</div></div>
       <label for="f-mots">Mots-clés de la niche (un par ligne)</label>
-      <textarea id="f-mots" name="mots" rows="4" placeholder="vinted&#10;achat revente&#10;resell"></textarea>
+      <textarea id="f-mots" name="mots" rows="4" placeholder="cuisine&#10;recettes faciles&#10;batch cooking"></textarea>
       <div class="note" style="margin-top:6px">Ce que le compte va chercher puis regarder, comme quelqu'un de la niche.</div>
-      <div class="deux">
+      <div class="rapide">
+        <label class="case"><input type="checkbox" name="rapide" id="f-rapide"> ⚡ Warm-up rapide : des séances d'affilée, la nuit comprise</label>
+        <div class="ligne">jusqu'à <input class="in" type="time" name="jusqua" id="f-jusqua" value="07:00"> <span class="muted small">(heure de Paris ; puis le compte publie)</span></div>
+      </div>
+      <div class="deux" id="f-normal">
         <div><label for="f-jours">Durée (jours)</label><input class="in" id="f-jours" name="jours" type="number" min="1" max="60" value="7"></div>
         <div><label for="f-min">Minutes par jour</label><input class="in" id="f-min" name="minutes_jour" type="number" min="5" max="180" value="40"></div>
       </div>
       <div class="estim" id="f-estim"></div>
       <label class="case"><input type="checkbox" name="likes" checked> Liker des vidéos de la niche (dès le 2e jour, 12 par jour au plus)</label>
-      <label class="case"><input type="checkbox" name="abonnements" checked> S'abonner à quelques comptes de la niche (dès le 3e jour, 3 par jour au plus)</label>
+      <label class="case"><input type="checkbox" name="abonnements" checked> S'abonner à des comptes de la niche (dès le 3e jour, 10 par jour au plus)</label>
       <label class="case"><input type="checkbox" name="bloque" checked> Bloquer les publications de ces comptes pendant le warm-up</label>
       <div style="margin-top:14px"><button class="btn prim">🔥 Lancer le warm-up</button></div>
       <div class="note">Jamais de commentaire ni de message. Les séances (≈ 13 min) tombent au hasard entre 9 h et 23 h, toujours entre deux publications : une publication passe avant.</div>

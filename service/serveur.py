@@ -9,6 +9,8 @@ import datetime as dt
 import io
 import json
 import logging
+import re
+import statistics
 import time
 from urllib.parse import urlparse
 
@@ -21,7 +23,11 @@ import journal
 import lieux
 import photos
 import programmation
+import salons
 import videos
+import sante
+import liens
+import partage
 from recettes import APPS, CHAUFFES, PRETES, PROFONDEURS
 from stock import PLATEFORMES, maintenant
 from wda import PROFONDEUR, ErreurAgent
@@ -177,8 +183,10 @@ def creer(parc, stock, publieur, http):
         projets = []
         for slug in stock.projets_des_comptes():
             comptes = stock.comptes_du_projet(slug)
-            noms = sorted({programmation.nom_groupe(c) for c in comptes})
+            noms = programmation.ordre_groupes(programmation.nom_groupe(c) for c in comptes)
             projets.append({"slug": slug, "groupes": [{"nom": g, "decalage_min": programmation.decalage(stock, noms, g),
+                                                        # téléphones partagés avec un autre projet : ses propres créneaux (partage.py)
+                                                        "creneaux": partage.creneaux_groupe(stock, slug, g),
                                                         "comptes": [{"plateforme": c["plateforme"], "identifiant": c["identifiant"]}
                                                                     for c in comptes if programmation.nom_groupe(c) == g]}
                                                        for g in noms]})
@@ -188,15 +196,140 @@ def creer(parc, stock, publieur, http):
                                   "creneaux": [f"{h:02d}:{m:02d}" for h, m in programmation.creneaux(stock)],
                                   "auto": stock.reglage("programmation_auto", "1") == "1", "variation_min": programmation.VARIATION_MIN,
                                   "projets": projets, "entrees": sorted(entrees.values(), key=lambda e: e["quand"]),
-                                  "chauffes": len(stock.chauffes(("en_cours",)))})
+                                  "chauffes": len(stock.chauffes(("en_cours",))),
+                                  "legendes_instagram": programmation.legendes_instagram(stock),
+                                  "facebook_instagram": {p: stock.reglage(f"facebook_instagram:{p}", "0") == "1" for p in stock.projets_des_comptes()}})
+
+    # ── le hub de gestion : la santé de
+    # chaque page (ses comptes), les téléphones, les alertes des dernières 48 h, les crédits Scrape Creators ──────────
+    @r.get(P + "/api/hub")
+    async def hub(req):
+        maintenant_ = dt.datetime.now(dt.timezone.utc)
+        t0 = maintenant_.timestamp()
+        aujourdhui = maintenant_.astimezone(sante.PARIS).date()
+        debut = dt.datetime.combine(aujourdhui, dt.time(0, 0), tzinfo=sante.PARIS).astimezone(dt.timezone.utc)
+        fin = dt.datetime.combine(aujourdhui + dt.timedelta(days=1), dt.time(0, 0), tzinfo=sante.PARIS).astimezone(dt.timezone.utc)
+        z = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        projet = req.query.get("projet") or sante.projet_principal(stock)   # le projet principal ou un autre projet (sélecteur du hub, 26/10/2026)
+        miens = {c["id"] for c in stock.comptes() if sante.du_projet(stock, c, projet)}
+        pubs = [p for p in stock.publications_du_jour(z(debut)) if p["compte_id"] in miens]
+        alertes = [a for a in stock.alertes_recentes(z(maintenant_ - dt.timedelta(hours=48)))
+                   if not a["cle"].startswith("compte:") or not a["cle"].split(":")[1].isdigit() or int(a["cle"].split(":")[1]) in miens]
+        chauffes = {ch["compte_id"]: ch for ch in stock.chauffes(("en_cours",))}
+        tels = {t.udid: t for t in parc.telephones.values()}
+        pages = {}
+        for c in stock.comptes():
+            if not c["actif"] or c["id"] not in miens:
+                continue
+            rel = stock.releves(c["id"], (aujourdhui - dt.timedelta(days=sante.CHUTE_JOURS)).isoformat())
+            dernier = rel[-1] if rel else None
+            posts = dernier["posts"] if dernier else []
+            ref = dt.datetime.fromisoformat(dernier["releve_le"].replace("Z", "+00:00")).timestamp() if dernier else t0
+            soucis = sante.diagnostic(posts, ref, rel) if posts else []
+            miennes = [a for a in alertes if a["cle"] == f"compte:{c['id']}" and a["jour"] == aujourdhui.isoformat()
+                       and a["type"] not in sante.DIAGNOSTICS]        # ceux-là sont recalculés juste au-dessus, règle du jour
+            raisons = [f"{titre} : {details}" for _, _, titre, details in soucis]
+            raisons += [a["message"] for a in miennes if a["type"] not in {x for x, _, _, _ in soucis}]
+            niveaux = [n for _, n, _, _ in soucis] + [a["niveau"] for a in miennes]
+            etat = "rouge" if "rouge" in niveaux else "orange" if niveaux else "ok" if posts or (dernier and not dernier["erreur"]) else "inconnu"
+
+            def vues(x, de=0, a=24):
+                r_ = dt.datetime.fromisoformat(x["releve_le"].replace("Z", "+00:00")).timestamp()
+                return sum(p["vues"] for p in x["posts"] if de * 3600 <= r_ - p["ts"] < a * 3600)
+            semaine = [p["vues"] for p in posts if 86400 < ref - p["ts"] < 7 * 86400]
+            veille = next((x for x in reversed(rel[:-1]) if x["abonnes"] is not None), None)
+            jour_c = [p for p in pubs if p["compte_id"] == c["id"]]
+            prevues = stock.prevues(c["id"])
+            derniere = (stock.dernieres_publications(c["id"], 1) or [None])[0]
+            t, ch = tels.get(c["udid"]), chauffes.get(c["id"])
+            pages.setdefault(c["groupe"] or "Sans page", []).append({
+                "id": c["id"], "plateforme": c["plateforme"], "identifiant": c["identifiant"], "etat": etat, "raisons": raisons,
+                "vues_24h": vues(dernier) if dernier and not (dernier["erreur"] and not posts) else None,
+                "vues_7j": vues(dernier, 0, 24 * 7) if posts else None,
+                "mediane_7j": int(statistics.median(semaine)) if semaine else None,
+                "posts_7j": sum(1 for p in posts if ref - p["ts"] < 7 * 86400),
+                "abonnes": dernier["abonnes"] if dernier else None,
+                "abonnes_delta": dernier["abonnes"] - veille["abonnes"] if dernier and veille and dernier["abonnes"] is not None else None,
+                "releve_le": dernier["releve_le"] if dernier else None, "erreur_releve": (dernier or {}).get("erreur") or None,
+                "serie": [{"jour": x["jour"], "vues_24h": vues(x)} for x in rel if x["posts"]][-8:],
+                "jour": {"ok": sum(p["etat"] == "publie" for p in jour_c), "echec": sum(p["etat"] == "echec" for p in jour_c),
+                         "prevues": sum(1 for p in prevues if p["quand"] and p["quand"] < z(fin))},
+                "prochaine": min((p["quand"] for p in prevues if p["quand"]), default=None),
+                "derniere": {"quand": derniere["fin"] or derniere["debut"], "etat": derniere["etat"], "lien": derniere["lien"]} if derniere else None,
+                "telephone": {"nom": t.nom, "pret": t.pret} if t else None,
+                "warmup": {"jour": max(1, min(chauffe.rang_du_jour(ch, aujourdhui) + 1, ch["jours"])), "jours": ch["jours"],
+                           "bloque": bool(ch["bloque"])} if ch else None})
+        ordre = {"rouge": 0, "orange": 1, "inconnu": 2, "ok": 3}
+        pages = [{"nom": nom, "etat": min((x["etat"] for x in l), key=lambda e: ordre[e]),
+                  "comptes": sorted(l, key=lambda x: (x["plateforme"] != "tiktok", x["identifiant"].lower()))} for nom, l in pages.items()]
+        pages.sort(key=lambda pg: (ordre[pg["etat"]], pg["nom"].lower()))
+        credits = stock.reglage("scrape_credits")
+        return web.json_response({
+            "maintenant": maintenant(), "aujourdhui": aujourdhui.isoformat(), "projet": projet, "pages": pages,
+            "jour": {"ok": sum(p["etat"] == "publie" for p in pubs), "echec": sum(p["etat"] == "echec" for p in pubs),
+                     "prevues": sum(x["jour"]["prevues"] for pg in pages for x in pg["comptes"]),
+                     "vues_24h": sum(x["vues_24h"] or 0 for pg in pages for x in pg["comptes"])},
+            "telephones": [{"nom": t.nom, "branche": t.branche, "pret": t.pret, "occupe": t.occupe, "wifi": bool(t.ip),
+                            "expire": t.expire.isoformat() if t.expire else None, "batterie": t.batterie} for t in parc.telephones.values()],
+            "alertes": [{k: a[k] for k in ("cle", "type", "niveau", "message", "cree_le")} for a in alertes[:60]],
+            "scrape": {"cle": bool(liens.cle()), "credits": int(credits) if (credits or "").isdigit() else None,
+                       "releves": [{"heure": f"{h} h {m:02d}" if m else f"{h} h", "fait": stock.reglage(f"sante_releve_{nom}") == aujourdhui.isoformat()}
+                                   for h, m, nom in sante.RELEVES]},
+            "discord": sorted(publieur.discord.urls)})
+
+    @r.post(P + "/api/sante/relever")
+    async def sante_relever(req):
+        """Le relevé tout de suite (bouton du hub) : vues, abonnés, liens manquants, alertes ; puis les crédits."""
+        bilan = await sante.relever(publieur, "à la main")
+        if not bilan["sans_cle"]:
+            bilan["credits"] = await sante.credits(publieur)
+        return web.json_response(bilan)
+
+    @r.post(P + "/api/sante/rapport")
+    async def sante_rapport(req):
+        if not publieur.discord.actif("RAPPORT"):
+            return erreur(409, "le salon 📊 rapport-du-jour n'est pas branché (secrets\\discord.env)")
+        sante.rapport(publieur)
+        return web.json_response({"ok": True})
+
+    @r.post(P + "/api/sante/agent")
+    async def sante_agent(req):
+        """Le compte rendu de l'agent réparateur (tâche planifiée du Mac, toutes les heures ; l'utilisateur, 19/10/2026 : « quand
+        y'a des alertes faut un agent pour les réparer ») dans le salon 🩺 santé-pages : {titre, texte, niveau : « vert »
+        (réparé), « orange » (en cours, à surveiller), « rouge » (besoin de l'utilisateur)}. Le webhook reste ici (jamais montré)."""
+        d = await req.json()
+        titre, texte = str(d.get("titre") or "").strip()[:250], str(d.get("texte") or "").strip()[:3900]
+        if not titre:
+            return erreur(400, "titre attendu")
+        if not publieur.discord.actif("SANTE"):
+            return erreur(409, "le salon 🩺 santé-pages n'est pas branché (secrets\\discord.env)")
+        couleur = {"vert": salons.VERT, "orange": salons.ORANGE, "rouge": salons.ROUGE}.get(str(d.get("niveau") or "vert"), salons.VERT)
+        mid = await publieur.discord.poster("SANTE", embeds=[{"color": couleur, "title": f"🛠️ {titre}", "description": texte}])
+        return web.json_response({"ok": bool(mid), "id": mid})
+
+    @r.post(P + "/api/sante/test-discord")
+    async def sante_test_discord(req):
+        """Un message dans chaque salon du service, pour voir que tout est branché."""
+        if not publieur.discord.urls:
+            return erreur(409, "aucun salon Discord branché (secrets\\discord.env)")
+        envoyes = {}
+        for salon in sorted(publieur.discord.urls):
+            envoyes[salon] = bool(await publieur.discord.poster(salon, "🧪 Test du service : ce salon est bien branché."))
+        return web.json_response(envoyes)
 
     @r.get(P + "/api/programmation")
     async def programmation_get(req):
         return web.json_response({"auto": stock.reglage("programmation_auto", "1") == "1",
+                                  "legendes_instagram": programmation.legendes_instagram(stock),
+                                  "legendes_tiktok": programmation.legendes(stock, "tiktok"),
+                                  "objectifs": {p: programmation.reglage_entier(stock, f"objectif:{p}", 0) for p in stock.projets_des_comptes()},
+                                  "dose": programmation.reglage_entier(stock, "dose", programmation.DOSE),
+                                  "facebook_instagram": {p: stock.reglage(f"facebook_instagram:{p}", "0") == "1" for p in stock.projets_des_comptes()},
                                   "creneaux": [f"{h:02d}:{m:02d}" for h, m in programmation.creneaux(stock)],
                                   "ecart_min": programmation.ecart_groupes(stock, max([2] + [len({programmation.nom_groupe(c) for c in stock.comptes_du_projet(p)})
                                                                                                for p in stock.projets_des_comptes()])),
-                                  "wifi_obligatoire": stock.reglage("wifi_obligatoire", "1") == "1"})
+                                  "wifi_obligatoire": stock.reglage("wifi_obligatoire", "1") == "1",
+                                  "profondeur": programmation.profondeur(stock)})
 
     @r.post(P + "/api/programmation")
     async def programmation_post(req):
@@ -206,6 +339,37 @@ def creer(parc, stock, publieur, http):
             stock.poser_reglage("programmation_auto", "1" if d["auto"] else "0")
         if "wifi_obligatoire" in d:
             stock.poser_reglage("wifi_obligatoire", "1" if d["wifi_obligatoire"] else "0")
+        if "profondeur" in d:                                 # la file d'une page, par compte (15 : 3 jours à 5 par jour)
+            try:
+                stock.poser_reglage("profondeur", max(1, int(d["profondeur"])))
+            except (TypeError, ValueError):
+                return erreur(400, "profondeur : un nombre de publications par compte")
+        for pf in programmation.LEGENDES:                     # legendes_instagram, legendes_tiktok : {projet: légende} ; vide : la description du centre
+            if isinstance(d.get(f"legendes_{pf}"), dict):
+                for projet, texte in d[f"legendes_{pf}"].items():
+                    texte = str(texte or "").strip()[:2200]
+                    stock.poser_reglage(f"legende_{pf}:{projet}", texte)
+                    if texte:
+                        n = stock.legendes_en_file(projet, pf, texte)
+                        log.info("légende %s de %s : « %s » (%s publication(s) en file mise(s) à jour)", pf, projet, texte, n)
+        if isinstance(d.get("objectifs"), dict):              # {projet: publications par jour} ; 0 : la dose normale seule
+            for projet, n in d["objectifs"].items():
+                try:
+                    stock.poser_reglage(f"objectif:{projet}", max(0, int(n or 0)))
+                except (TypeError, ValueError):
+                    return erreur(400, "objectifs : un nombre de publications par jour")
+        for cle in ("dose", "ecart_groupes"):                 # la dose normale d'une page ; l'écart fixe entre groupes (0 : réparti)
+            if cle in d:
+                try:
+                    stock.poser_reglage(cle, max(0, int(d[cle] or 0)))
+                except (TypeError, ValueError):
+                    return erreur(400, f"{cle} : un nombre")
+        if isinstance(d.get("tiktok_confirmation_musique"), dict):   # {projet: bool} : accepter la confirmation de musique de TikTok
+            for projet, oui in d["tiktok_confirmation_musique"].items():
+                stock.poser_reglage(f"tiktok_confirmation_musique:{projet}", "1" if oui else "0")
+        if isinstance(d.get("facebook_instagram"), dict):     # {projet: bool} : « Partager aussi sur Facebook » coché
+            for projet, oui in d["facebook_instagram"].items():
+                stock.poser_reglage(f"facebook_instagram:{projet}", "1" if oui else "0")
         if "creneaux" in d:
             brut = ",".join(d["creneaux"]) if isinstance(d["creneaux"], list) else str(d["creneaux"])
             stock.poser_reglage("creneaux", brut)
@@ -379,10 +543,7 @@ def creer(parc, stock, publieur, http):
         async with t.gestes:
             t.occupe = "essai d'import dans Photos"
             try:
-                await videos.verifier_publiable(http, cle)
-                dest = lieux.DONNEES / "videos" / f"essai-{videos.nom_de_travail(cle)}"
-                if not dest.exists():
-                    await videos.telecharger(http, cle, dest)
+                dest = await videos.copie_locale(http, cle, lieux.DONNEES / "videos")
                 await photos.importer(t, dest, f"essai-{int(time.time())}.mp4")
             except (photos.ErreurImport, RuntimeError) as e:
                 return erreur(502, str(e))
@@ -453,9 +614,179 @@ def creer(parc, stock, publieur, http):
                 "id": c["id"], "plateforme": c["plateforme"], "identifiant": c["identifiant"],
                 "telephone": t.nom if t else None, "pret": bool(t and t.pret), "recette": PRETES.get(c["plateforme"], False),
                 "deja": {"etat": d["etat"], "lien": d["lien"]} if d and d["etat"] in ("en_attente", "en_cours", "publie") else None})
-        return web.json_response({"projet": slug, "groupes": [{"nom": k, "comptes": v} for k, v in groupes.items()],
+        # « page » : une page réglée (une niche, ou un jour 1 : les comptes 1 et 2, généralistes, depuis le 16/10/2026),
+        # que le centre remplit lui-même (3 jours d'avance, 3 neuves pour 1 réutilisée) : rien ne s'y remonte à la validation
+        reglees = {p["groupe"]: p for p in stock.pages(slug)}
+        return web.json_response({"projet": slug, "groupes": [{"nom": k, "comptes": v, "niche": (reglees.get(k) or {}).get("niche") or None,
+                                                              "page": bool(reglees.get(k) and (reglees[k]["niche"] or reglees[k]["debut"]))}
+                                                             for k, v in groupes.items()],
                                   "publications": pubs[:40], "ecart_min": int(stock.reglage("ecart_envoi_min", "30")),
                                   "repetition": stock.reglage("repetition_defaut", "1") == "1"})
+
+    # ── les pages de niche : la niche d'un groupe de comptes et sa montée en charge ──────────────
+    @r.get(P + "/api/vues")
+    async def vues_pages(req):
+        """Les vues des pages jour par jour et semaine par semaine (la section « Vues des pages » de l'onglet
+        Calendrier) : les vues gagnées d'un relevé à l'autre (sante.vues_par_jour) et les publications en ligne du jour."""
+        aujourdhui = dt.datetime.now(sante.PARIS).date()
+        try:
+            n = min(max(int(req.query.get("jours") or 56), 7), 400)
+        except ValueError:
+            n = 56
+        depuis = aujourdhui - dt.timedelta(days=n - 1)
+        projet = req.query.get("projet") or sante.projet_principal(stock)
+        miens = {c["id"] for c in stock.comptes() if sante.du_projet(stock, c, projet)}
+        vues = sante.vues_par_jour(stock, depuis.isoformat(), projet)
+        debut = dt.datetime.combine(depuis, dt.time(0, 0), tzinfo=sante.PARIS).astimezone(dt.timezone.utc)
+        publiees = {}
+        for p in stock.publications_du_jour(debut.strftime("%Y-%m-%dT%H:%M:%SZ")):
+            if p["etat"] == "publie" and p["compte_id"] in miens:
+                j = sante.jour_paris(dt.datetime.fromisoformat((p["fin"] or p["debut"] or p["quand"] or p["cree_le"]).replace("Z", "+00:00")))
+                publiees[j] = publiees.get(j, 0) + 1
+        jours = []
+        for i in range(n):
+            j = (depuis + dt.timedelta(days=i)).isoformat()
+            v = vues.get(j)
+            if not v and not publiees.get(j) and not jours:     # rien avant le premier relevé ni la première publication
+                continue
+            jours.append({"jour": j, "vues": v["tiktok"] + v["instagram"] if v else None, "tiktok": v["tiktok"] if v else None,
+                          "instagram": v["instagram"] if v else None, "comptes": v["comptes"] if v else 0, "publiees": publiees.get(j, 0)})
+        semaines = {}
+        for x in jours:
+            d = dt.date.fromisoformat(x["jour"])
+            s = semaines.setdefault((d - dt.timedelta(days=d.weekday())).isoformat(),
+                                    {"vues": 0, "tiktok": 0, "instagram": 0, "publiees": 0, "jours": 0})
+            if x["vues"] is not None:
+                s["jours"] += 1
+                for k in ("vues", "tiktok", "instagram"):
+                    s[k] += x[k]
+            s["publiees"] += x["publiees"]
+        return web.json_response({
+            "aujourdhui": aujourdhui.isoformat(), "soir_fait": stock.reglage("sante_releve_soir") == aujourdhui.isoformat(),
+            "jours": jours, "semaines": [{"lundi": k, **v} for k, v in sorted(semaines.items())]})
+
+    @r.get(P + "/api/pages")
+    async def pages(req):
+        """Chaque groupe de comptes d'un projet (une page : son TikTok et son Insta), sa niche, son jour 1, sa dose du jour
+        et ce qu'il a en file ."""
+        slug = req.query.get("projet", "")
+        aujourdhui = dt.datetime.now(sante.PARIS).date()
+        reglees = {p["groupe"]: p for p in stock.pages(slug)}
+        groupes = {}
+        for c in stock.comptes_du_projet(slug):
+            groupes.setdefault(programmation.nom_groupe(c), []).append(c)
+        out = []
+        prof = programmation.profondeur(stock)
+        bloques = stock.comptes_bloques()
+        for nom, comptes in sorted(groupes.items()):
+            page = reglees.get(nom)
+            ids = [c["id"] for c in comptes]
+            pubs = stock.publications_des_comptes(ids)
+            quand = sorted({p["quand"] for p in pubs if p["quand"] and p["etat"] in programmation.OCCUPE})
+            jours = [programmation.a_paris(q).date() for q in quand]
+            # ce qui attend d'être publié, compte par compte (27/10/2026) : la page a l'avance de son compte le moins servi
+            # (un compte en warm-up « publications bloquées » ne compte pas)
+            file = {i: 0 for i in ids if i not in bloques}
+            for x in stock.file_des_comptes(list(file)):
+                file[x["compte_id"]] += 1
+            out.append({"groupe": nom, "niche": (page or {}).get("niche") or "", "debut": (page or {}).get("debut"),
+                        "jour": (aujourdhui - dt.date.fromisoformat(page["debut"])).days + 1 if page and page.get("debut") else None,
+                        "quotas": [programmation.quota(stock, page, aujourdhui + dt.timedelta(days=i)) for i in range(4)],
+                        "aujourdhui": sum(1 for j in jours if j == aujourdhui),
+                        "a_venir": min(file.values()) if file else 0,
+                        "file": {str(i): n for i, n in file.items()}, "profondeur": prof,
+                        "telephones": sorted({c["udid"] for c in comptes if c["udid"]}),
+                        # au-delà de la profondeur
+                        "en_trop": [{**e, "video": e["video"].split("/", 1)[1]} for e in programmation.en_trop(stock, ids, prof)
+                                    if e["video"].startswith(videos.PREFIXE)] if page and (page["niche"] or page["debut"]) else [],
+                        # les vidéos du projet qui ont déjà une publication sur la page, quel qu'en soit l'état : le centre
+                        # compte à part celles qui attendent encore d'être programmées (son avance)
+                        "videos": sorted({videos.decouper(p["video"])[1] for p in pubs if p["video"].startswith(videos.PREFIXE)}),
+                        "comptes": [{"id": c["id"], "plateforme": c["plateforme"], "identifiant": c["identifiant"]} for c in comptes]})
+        return web.json_response({"projet": slug, "creneaux": len(programmation.creneaux(stock)), "pages": out})
+
+    @r.get(P + "/api/performances")
+    async def performances(req):
+        """Les vues de chaque vidéo publiée du projet (le meilleur de ses publications, au dernier relevé qui la voit) :
+        le centre choisit d'après elles quoi remonter sur les pages de niche."""
+        slug = req.query.get("projet", "")
+        vues, mediane, comptes = {}, {}, {c["id"]: c for c in stock.comptes_du_projet(slug)}
+        for c in comptes.values():
+            mois = {}                     # ses posts du mois (dernières vues vues) : la médiane du compte
+            for r_ in stock.releves(c["id"], "2000-01-01"):
+                for p in r_["posts"]:
+                    if p.get("lien"):
+                        vues[p["lien"].rstrip("/")] = p["vues"]
+                    if time.time() - p["ts"] < 30 * 86400:
+                        mois[p["id"]] = p["vues"]
+            mediane[c["id"]] = statistics.median(mois.values()) if mois else None
+        out = {}
+        for p in stock.publications(5000):
+            if p["etat"] != "publie" or p["repetition"] or not p["lien"] or not p["video"].startswith(videos.PREFIXE):
+                continue
+            v = vues.get(p["lien"].rstrip("/"))
+            if v is None:
+                continue
+            x = out.setdefault(p["video"].split("/", 1)[1], {"vues": 0, "publications": 0, "meilleure": None})
+            if x["meilleure"] is None or v > x["vues"]:   # sa meilleure publication : de quoi repérer une pépite (centre, 31/10/2026)
+                c = comptes.get(p["compte_id"])
+                x["meilleure"] = {"vues": v, "compte_id": p["compte_id"], "plateforme": c and c["plateforme"],
+                                  "groupe": c and programmation.nom_groupe(c), "publie_le": p["fin"], "mediane": mediane.get(p["compte_id"])}
+            x["vues"] = max(x["vues"], v)
+            x["publications"] += 1
+        return web.json_response({"projet": slug, "videos": out})
+
+    @r.get(P + "/api/performances/publications")
+    async def performances_publications(req):
+        """Chaque publication du projet avec ses vues au dernier relevé qui la voit, son compte et son âge à ce relevé (la
+        boucle des performances, 22/10/2026 : le centre les écrit dans la base du service, pour
+        que les vues des comptes clips fassent voter leurs clips et apprendre ce qui marche : style, musique, accroche…).
+        Les comptes retirés comptent aussi : leurs vues restent vraies. Instagram ne montre que ses 12 derniers posts : sur
+        une page qui publie beaucoup, le dernier relevé d'un post peut tomber avant 48 h (« age_h » le dit)."""
+        slug = req.query.get("projet", "")
+        cle = lambda u: (re.search(r"/video/(\d+)|/(?:reel|reels|p)/([^/?#]+)", u or "") or [None, None, None])  # noqa: E731
+        vus, comptes = {}, {}
+        for c in stock.comptes():
+            if c["projet"] != slug:
+                continue
+            comptes[c["id"]] = c
+            for r_ in stock.releves(c["id"], "2000-01-01"):
+                for p in r_["posts"]:
+                    m = cle(p.get("lien"))
+                    if m[1] or m[2]:
+                        vus[(c["id"], m[1] or m[2])] = (p["vues"], r_["releve_le"], p.get("ts") or 0)
+        out = []
+        for p in stock.publications(5000):
+            if p["etat"] != "publie" or p["repetition"] or not p["lien"] or not p["video"].startswith(videos.PREFIXE):
+                continue
+            m = cle(p["lien"])
+            v = vus.get((p["compte_id"], m[1] or m[2])) if (m[1] or m[2]) else None
+            ts, vues, vu_le, age = None, None, None, None
+            if v:
+                vues, vu_le, ts = v
+                age = round((dt.datetime.fromisoformat(vu_le.replace("Z", "+00:00")).timestamp() - ts) / 3600, 1) if ts else None
+            out.append({"publication": p["id"], "video": p["video"].split("/", 1)[1], "lien": p["lien"], "plateforme": p["plateforme"],
+                        "compte": p["identifiant"], "groupe": (comptes.get(p["compte_id"]) or {}).get("groupe") or None,
+                        "publie_le": p["fin"] or p["debut"] or p["quand"],
+                        "poste_le": dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if ts else None,
+                        "vues": vues, "vu_le": vu_le, "age_h": age})
+        return web.json_response({"projet": slug, "publications": out})
+
+    @r.post(P + "/api/pages")
+    async def poser_page(req):
+        d = await req.json()
+        projet, groupe = str(d.get("projet") or "").strip(), str(d.get("groupe") or "").strip()
+        if not projet or not groupe:
+            return erreur(400, "projet et groupe attendus")
+        debut = str(d.get("debut") or "").strip() or None
+        if debut:
+            try:
+                dt.date.fromisoformat(debut)
+            except ValueError:
+                return erreur(400, "jour 1 attendu au format AAAA-MM-JJ")
+        p = stock.poser_page(projet, groupe, str(d.get("niche") or "").strip()[:500], debut)
+        log.info("page %s / %s : niche « %s », jour 1 %s", projet, groupe, p["niche"], p["debut"] or "—")
+        return web.json_response(p)
 
     @r.post(P + "/api/envois")
     async def creer_envoi(req):
@@ -487,13 +818,91 @@ def creer(parc, stock, publieur, http):
             if g not in ordre:
                 ordre.append(g)
         envoi = stock.creer_envoi(cle, video["titre"], ecart)
-        pubs = [stock.creer_publication(c["id"], cle, video["titre"], legende,
+        pubs = [stock.creer_publication(c["id"], cle, video["titre"], programmation.legende_pour(stock, c, legende, video.get("description") or ""),
                                         (t0 + dt.timedelta(minutes=ordre.index(c["groupe"] or "@" + c["identifiant"]) * ecart)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                                         bool(d.get("repetition")), envoi)
                 for c in comptes]
         log.info("envoi %s : « %s » vers %s compte(s), %s groupe(s), un groupe toutes les %s min%s", envoi, video["titre"],
                  len(pubs), len(ordre), ecart, " (répétition)" if d.get("repetition") else "")
         return web.json_response({"envoi": envoi, "publications": pubs})
+
+    # ── le calendrier façon planificateur : les vidéos validées d'un projet pas
+    # encore programmées, qu'on glisse sur le créneau libre d'un groupe ─────────────────────────────────────────────
+    @r.get(P + "/api/a-programmer")
+    async def a_programmer(req):
+        slug = req.query.get("projet", "")
+        try:
+            prets = [v for v in await videos_publiables() if videos.decouper(v["cle"])[0] == slug and not v.get("groupe")]
+        except (aiohttp.ClientError, RuntimeError, asyncio.TimeoutError) as e:
+            return erreur(502, f"dossier des vidéos illisible : {e}")
+        out = []
+        for v in prets:
+            pubs = [x for x in stock.publications_de_video(v["cle"]) if x["etat"] in ("en_attente", "en_cours", "publie")]
+            out.append({**v, "places": len(pubs), "groupes": sorted({x["groupe"] or "@" + x["identifiant"] for x in pubs})})
+        out.sort(key=lambda v: (v["places"] > 0, v["titre"]))   # les jamais programmées en tête
+        return web.json_response(out)
+
+    @r.post(P + "/api/calendrier/placer")
+    async def placer(req):
+        """Une vidéo glissée sur un créneau : elle part sur les comptes prêts de ce groupe (TikTok + Insta ensemble), à
+        l'heure du créneau tirée à ± 15 min comme la programmation (jamais deux jours pareils), jamais dans le passé.
+        Reel d'essai (« creneau_essai », Insta seul) : « pile » = une version de plus sur un créneau déjà pris, à la suite
+        de ce qui y part ; « exact » = à l'heure choisie par l'utilisateur (décalée seulement si elle tombe sur le projet principal)."""
+        d = await req.json()
+        cle, groupe = str(d.get("video", "")), str(d.get("groupe", ""))
+        video = next((v for v in await videos_publiables() if v["cle"] == cle), None)
+        if not video:
+            return erreur(400, "cette vidéo n'est pas dans le dossier des vidéos : elle ne peut pas partir")
+        slug, _ = videos.decouper(cle)
+        comptes = [c for c in stock.comptes_du_projet(slug) if programmation.nom_groupe(c) == groupe]
+        if not comptes:
+            return erreur(400, f"aucun compte actif dans le groupe {groupe}")
+        if d.get("creneau_essai"):          # un créneau de reel d'essai : l'Instagram du groupe seulement
+            comptes = [c for c in comptes if c["plateforme"] == "instagram"]
+            d["essai"] = True
+        prets = [c for c in comptes if c["udid"] and PRETES.get(c["plateforme"])]
+        if not prets:
+            return erreur(400, f"{groupe} : aucun compte rattaché à un téléphone avec une recette prête")
+        bloque = bloque_par_chauffe(prets, False)
+        if bloque:
+            return bloque
+        try:
+            t = dt.datetime.fromisoformat(iso_utc(d.get("quand")).replace("Z", "+00:00"))
+        except (TypeError, ValueError, AttributeError):
+            return erreur(400, "quand : une heure ISO avec fuseau")
+        # les téléphones partagés avec un autre projet (le projet principal) : on ne prend que les trous de sa grille (partage.py)
+        pile = bool(d.get("creneau_essai") and d.get("pile"))
+        if pile:
+            # une version de plus sur ce créneau : elle
+            # part à la suite de ce qui est déjà prévu autour sur ce téléphone, ~5 min par publication
+            udids = {c["udid"] for c in prets}
+            autour = [p for p in stock.publications_des_comptes([c["id"] for s_ in stock.projets_des_comptes()
+                                                                   for c in stock.comptes_du_projet(s_) if c["udid"] in udids])
+                      if p["etat"] in programmation.OCCUPE and p["quand"]
+                      and -20 * 60 <= (dt.datetime.fromisoformat(p["quand"].replace("Z", "+00:00")) - t).total_seconds() <= 60 * 60]
+            t += dt.timedelta(minutes=5 * len(autour))
+        voulu = t
+        t = partage.ajuster(stock, prets, slug, t, varier=not (d.get("exact") or pile))
+        if not t:
+            return erreur(409, f"{groupe} : pas de trou à une heure près sur ses téléphones sans gêner les publications "
+                               "d'un autre projet : choisis un autre créneau")
+        if pile and abs((t - voulu).total_seconds()) > 10 * 60:
+            return erreur(409, f"Plus de place pour une version sur ce créneau : elle déborderait sur les publications du projet principal "
+                               f"(prochain moment libre : {programmation.a_paris(t.strftime('%Y-%m-%dT%H:%M:%SZ')):%H:%M}). "
+                               "Pose-la à une heure précise ou sur un autre créneau")
+        quand = t.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # la légende : celle que le calendrier envoie (écrite à l'instant, la liste du centre est en cache 1 min), sinon le centre
+        legende = (str(d.get("legende") or "").strip() or video.get("description") or "")[:2200]
+        envoi = stock.creer_envoi(cle, video["titre"], 0, auto=True)   # « auto » : un créneau manqué est reporté, pas rattrapé en rafale
+        # « Reel d'essai » coché dans le calendrier : seulement sur Instagram (TikTok n'a pas d'équivalent)
+        essai = lambda c: json.dumps({"essai": True}) if d.get("essai") and c["plateforme"] == "instagram" else ""  # noqa: E731
+        pubs = [stock.creer_publication(c["id"], cle, video["titre"], programmation.legende_pour(stock, c, legende), quand, False, envoi,
+                                        essai(c))
+                for c in prets]
+        log.info("calendrier : « %s » placée sur %s (%s compte(s)) le %s", video["titre"], groupe, len(pubs),
+                 programmation.a_paris(quand).strftime("%d/%m à %H:%M"))
+        return web.json_response({"envoi": envoi, "quand": quand, "publications": pubs,
+                                  "ignores": [c["identifiant"] for c in comptes if c not in prets]})
 
     def bloque_par_chauffe(comptes, repetition):
         """Un envoi vers un compte en warm-up « publications bloquées » est refusé (une répétition passe)."""
@@ -526,7 +935,9 @@ def creer(parc, stock, publieur, http):
         bloque = bloque_par_chauffe([compte], d.get("repetition"))
         if bloque:
             return bloque
-        p = stock.creer_publication(compte["id"], cle, video["titre"], str(d.get("legende", ""))[:2200],
+        legende = str(d["legende"] if d.get("legende") is not None else video.get("description") or "")[:2200]
+        p = stock.creer_publication(compte["id"], cle, video["titre"],
+                                    programmation.legende_pour(stock, compte, legende, video.get("description") or ""),
                                     iso_utc(d.get("quand")), bool(d.get("repetition")))
         log.info("publication %s mise en file : %s sur @%s%s", p["id"], video["titre"], compte["identifiant"],
                  " (répétition)" if p["repetition"] else "")
@@ -546,8 +957,59 @@ def creer(parc, stock, publieur, http):
         p = stock.publication(pid)
         if not p or p["etat"] != "en_attente":
             return erreur(409, "seule une publication en attente s'annule")
-        stock.maj_publication(pid, etat="annule", fin=maintenant())
+        stock.maj_publication(pid, etat="annule", fin=maintenant(), supprime_le=maintenant())
         return web.json_response(stock.publication(pid))
+
+    @r.get(P + "/api/corbeille")
+    async def corbeille(req):
+        projet = req.query.get("projet", "").strip()
+        if not projet:
+            return erreur(400, "choisis un projet")
+        entrees = {}
+        for p in stock.corbeille(projet):
+            groupe = p["groupe"] or "@" + p["identifiant"]
+            cle = (p["envoi_id"], p["video"], groupe, (p["quand"] or "")[:16])
+            if cle not in entrees:
+                entrees[cle] = {"titre": p["titre"] or p["video"], "groupe": groupe, "quand": p["quand"],
+                                "supprime_le": p["supprime_le"], "comptes": []}
+            entrees[cle]["comptes"].append({"publication": p["id"], "plateforme": p["plateforme"], "identifiant": p["identifiant"], "deja": p["deja"]})
+        return web.json_response({"entrees": list(entrees.values())})
+
+    @r.post(P + "/api/corbeille/restaurer")
+    async def restaurer(req):
+        d = await req.json()
+        ids = sorted({int(i) for i in d.get("ids") or []})
+        disponibles = {p["id"]: p for p in stock.corbeille(str(d.get("projet") or ""))}
+        if not ids or any(i not in disponibles for i in ids):
+            return erreur(409, "ces publications ne sont plus dans la corbeille de ce projet ; actualise la liste")
+        pubs = [disponibles[i] for i in ids]
+        if any(p["deja"] for p in pubs):
+            return erreur(409, "cette vidéo est déjà programmée ou publiée sur un des comptes ; elle ne sera pas remise en double")
+        p = pubs[0]
+        groupe, dec = programmation.groupe_de(stock, stock.compte(p["compte_id"]))
+        if any(x["compte_id"] not in groupe or x["video"] != p["video"] or x["envoi_id"] != p["envoi_id"] for x in pubs):
+            return erreur(400, "restaure une seule vidéo d'un même groupe à la fois")
+        # Garde les heures d'origine si elles restent à venir et libres. Sinon, un créneau commun libre, jamais « maintenant ».
+        anciennes = [x["quand"] for x in pubs]
+        limite = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        autres = [x for x in stock.publications_des_comptes(groupe) if x["id"] not in ids and x["etat"] in ("en_attente", "en_cours", "publie")]
+        origine = all(t and t > limite for t in anciennes) and not any(
+            x["quand"] and abs((programmation.a_paris(x["quand"]) - programmation.a_paris(t)).total_seconds()) < 25 * 60
+            for x in autres for t in anciennes if t)
+        quand = min(anciennes) if origine else programmation.prochain_creneau(stock, groupe, dec, exclure=set(ids))
+        if not quand:
+            return erreur(409, "aucun créneau libre ; les publications restent dans la corbeille")
+        stock.db.execute("begin immediate")
+        try:
+            for x in pubs:
+                stock.maj_publication(x["id"], etat="en_attente", quand=x["quand"] if origine else quand,
+                                     fin=None, erreur="", etape="", supprime_le=None)
+                stock.etape(x["id"], "Restaurée depuis la corbeille : " + (x["quand"] if origine else quand))
+            stock.db.execute("commit")
+        except Exception:
+            stock.db.execute("rollback")
+            raise
+        return web.json_response({"quand": quand, "origine": origine, "ids": ids})
 
     @r.post(P + "/api/publications/{pid:\\d+}/relancer")
     async def relancer_publication(req):
@@ -560,9 +1022,9 @@ def creer(parc, stock, publieur, http):
         champs = {"etat": "en_attente", "erreur": "", "etape": "", "fin": None, "quand": None}
         if "repetition" in d:
             champs["repetition"] = 1 if d["repetition"] else 0
-        if d.get("creneau"):   # au prochain créneau libre de son groupe plutôt que tout de suite (calendrier, 05/10/2026)
-            du_groupe, decalage = programmation.groupe_de(stock, stock.compte(p["compte_id"]))
-            champs["quand"] = programmation.prochain_creneau(stock, du_groupe, decalage)
+        if d.get("creneau"):   # au prochain créneau libre de son compte plutôt que tout de suite (calendrier, 05/10/2026)
+            _, decalage = programmation.groupe_de(stock, stock.compte(p["compte_id"]))
+            champs["quand"] = programmation.prochain_creneau(stock, [p["compte_id"]], decalage, exclure={pid})
         stock.maj_publication(pid, **champs)
         return web.json_response(stock.publication(pid))
 
@@ -579,11 +1041,63 @@ def creer(parc, stock, publieur, http):
         du_groupe, _ = programmation.groupe_de(stock, stock.compte(pubs[0]["compte_id"]))
         if any(p["compte_id"] not in du_groupe for p in pubs):
             return erreur(400, "ces publications ne sont pas du même groupe de comptes")
-        quand = programmation.reporter(stock, pubs, "Depuis le calendrier" if pubs[0]["etat"] == "en_attente"
-                                       else "Ratée, remise en file depuis le calendrier")
+        # la raison, écrite dans l'étape de chaque publication : celle de l'appelant (la réserve d'une page, centre), sinon
+        # le bouton du calendrier
+        raison = str(d.get("raison") or "").strip()[:80] or ("Depuis le calendrier" if pubs[0]["etat"] == "en_attente"
+                                                             else "Ratée, remise en file depuis le calendrier")
+        quand = programmation.reporter(stock, pubs, raison)
         if not quand:
             return erreur(409, "aucun créneau libre dans les 90 jours (réglage « créneaux » vide ?)")
         return web.json_response({"quand": quand, "publications": [stock.publication(p["id"]) for p in pubs]})
+
+    @r.post(P + "/api/publications/reserver")
+    async def reserver(req):
+        """Ces publications en file sortent de la file (annulées, l'étape dit pourquoi) : le centre les a mises dans la
+        réserve de leur page, d'où « Reporter » les reprendra (27/10/2026 : 3 jours de file par page,
+        pas deux semaines)."""
+        d = await req.json()
+        pubs = [stock.publication(int(i)) for i in d.get("ids") or []]
+        if not pubs or not all(pubs):
+            return erreur(400, "publications inconnues")
+        if any(p["etat"] != "en_attente" or p["repetition"] for p in pubs):
+            return erreur(409, "seule une vraie publication en attente se met en réserve")
+        raison = str(d.get("raison") or "").strip()[:120] or "réserve de la page"
+        for p in pubs:
+            stock.maj_publication(p["id"], etat="annule", fin=maintenant())
+            stock.etape(p["id"], f"Mise en réserve : {raison}")
+        log.info("mises en réserve (%s) : n° %s", raison, ", ".join(str(p["id"]) for p in pubs))
+        return web.json_response({"publications": [stock.publication(p["id"]) for p in pubs]})
+
+    @r.post(P + "/api/pages/donner")
+    async def donner(req):
+        """Un remontage d'une autre page (sa réserve) part sur cette page, chaque compte à son prochain créneau libre
+        (27/10/2026 : le surplus des Comptes 1 et 2 sert les pages qui manquent). Jamais deux fois la même vidéo sur un
+        même téléphone : refusé si elle a déjà une publication (autre qu'annulée) sur un compte d'un téléphone de la page."""
+        d = await req.json()
+        cle, groupe = str(d.get("video", "")), str(d.get("groupe", ""))
+        video = next((v for v in await videos_publiables() if v["cle"] == cle), None)
+        if not video:
+            return erreur(400, "cette vidéo n'est pas dans le dossier des vidéos : elle ne peut pas partir")
+        slug, _ = videos.decouper(cle)
+        comptes = stock.comptes_du_projet(slug)
+        bloques = stock.comptes_bloques()
+        prets = [c for c in comptes if programmation.nom_groupe(c) == groupe and c["udid"] and PRETES.get(c["plateforme"])
+                 and c["id"] not in bloques]
+        if not prets or not programmation.page_reglee(stock, slug, groupe):
+            return erreur(400, f"{groupe} : pas une page réglée avec des comptes prêts")
+        udids = {c["udid"] for c in prets}
+        voisins = {c["id"] for s_ in stock.projets_des_comptes() for c in stock.comptes_du_projet(s_) if c["udid"] in udids}
+        if any(x["etat"] != "annule" and x["compte_id"] in voisins for x in stock.publications_de_video(cle)):
+            return erreur(409, f"cette vidéo a déjà une publication sur un compte du même téléphone que {groupe}")
+        noms = programmation.ordre_groupes(programmation.nom_groupe(c) for c in comptes)
+        pubs = programmation.placer(stock, cle, video["titre"], video.get("description"), prets, programmation.decalage(stock, noms, groupe))
+        if not pubs:
+            return erreur(409, "aucun créneau libre dans les 90 jours")
+        raison = str(d.get("raison") or "").strip()[:80] or "Donnée par une autre page"
+        for x in pubs:
+            stock.etape(x["id"], f"{raison} : prévue le {programmation.a_paris(x['quand']).strftime('%d/%m à %H:%M')}")
+        log.info("%s : « %s » donnée à %s, le %s", raison, video["titre"], groupe, programmation.a_paris(pubs[0]["quand"]).strftime("%d/%m à %H:%M"))
+        return web.json_response({"quand": min(x["quand"] for x in pubs), "publications": pubs})
 
     @r.post(P + "/api/publications/{pid:\\d+}/pas-en-ligne")
     async def pas_en_ligne(req):
@@ -600,13 +1114,22 @@ def creer(parc, stock, publieur, http):
     @r.post(P + "/api/publications/{pid:\\d+}/en-ligne")
     async def en_ligne(req):
         """Une publication marquée en échec alors que la vidéo est bien en ligne (vérifié sur le compte) : elle passe
-        en publiée, et son lien est cherché comme pour les autres (sans toucher au téléphone)."""
+        en publiée, avec son lien s'il est donné ({"lien": …}), sinon cherché comme pour les autres (sans toucher au
+        téléphone)."""
         pid = int(req.match_info["pid"])
         p = stock.publication(pid)
         if not p or p["etat"] != "echec" or p["repetition"]:
             return erreur(409, "seule une vraie publication en échec se marque en ligne")
+        lien = str((await req.json() if req.can_read_body else {}).get("lien") or "").strip()
+        if lien and not re.match(r"^https://(www\.)?(instagram\.com/(reel|p)/[\w-]+/?|tiktok\.com/@[\w.]+/video/\d+)", lien):
+            return erreur(400, "colle le lien du reel Instagram ou de la vidéo TikTok")
         stock.maj_publication(pid, etat="publie", erreur="")
         stock.etape(pid, "Marquée en ligne à la main (vérifiée sur le compte)")
+        if lien:
+            stock.maj_publication(pid, lien=lien)
+            stock.etape(pid, f"En ligne : {lien}")
+            await publieur.noter_lien(pid, stock.publication(pid), lien)
+            return web.json_response(stock.publication(pid))
         depuis = dt.datetime.fromisoformat(p["debut"].replace("Z", "+00:00")).timestamp() if p.get("debut") else 0
         publieur.chercher_lien(pid, stock.publication(pid), {"plateforme": p["plateforme"], "identifiant": p["identifiant"]}, depuis)
         return web.json_response(stock.publication(pid))
@@ -635,11 +1158,12 @@ def creer(parc, stock, publieur, http):
             j = chauffe.rang_du_jour(ch, chauffe.jour_paris(maintenant_))
             plan, du_jour = chauffe.etat_du_plan(stock, ch, maintenant_) if ch["etat"] == "en_cours" else ([], [])
             t = tels.get(ch["udid"])
+            cible = (round(sum(s["minutes"] for s in chauffe.plan_rapide(ch)), 1) if ch.get("rapide")
+                     else round(chauffe.minutes_du_jour(ch, j), 1) if 0 <= j < ch["jours"] else 0)
             out.append({**ch, "mots": chauffe.mots_de(ch), "jour": max(1, min(j + 1, ch["jours"])), "plan": plan,
-                        "aujourdhui": {"minutes": round(sum(x["minutes_faites"] for x in du_jour), 1),
-                                       "cible": round(chauffe.minutes_du_jour(ch, j), 1) if 0 <= j < ch["jours"] else 0},
+                        "aujourdhui": {"minutes": round(sum(x["minutes_faites"] for x in du_jour), 1), "cible": cible},
                         "totaux": {"minutes": round(sum(x["minutes_faites"] for x in toutes), 1),
-                                   **{k: sum(x[k] for x in toutes) for k in ("vues", "likes", "abonnements", "recherches")},
+                                   **{k: sum(x.get(k) or 0 for x in toutes) for k in ("vues", "likes", "abonnements", "recherches", "likes_commentaires")},
                                    "seances": len(toutes)},
                         "seances": [seance_resumee(x) for x in toutes[:15]],
                         "telephone": {"nom": t.nom, "pret": t.pret, "occupe": t.occupe} if t else None})
@@ -650,6 +1174,8 @@ def creer(parc, stock, publieur, http):
                    for c in stock.comptes() if c["actif"]]
         actives = [c for c in out if c["etat"] == "en_cours"]
         return web.json_response({"chauffes": out, "comptes": comptes, "maintenant": maintenant(),
+                                  "projets": stock.projets_des_comptes(), "inventaires": etat_inventaires(),
+                                  "pause": chauffe.en_pause(stock),
                                   "go_jour": round(sum(c["minutes_jour"] for c in actives) * chauffe.MO_PAR_MINUTE / 1000, 1),
                                   "journee": [f"{m // 60:02d}:{m % 60:02d}" for m in chauffe.JOURNEE],
                                   "minutes_seance": chauffe.MINUTES_SEANCE, "likes_jour": chauffe.LIKES_JOUR,
@@ -660,7 +1186,7 @@ def creer(parc, stock, publieur, http):
         mots = d.get("mots", ancien["mots"] if ancien else "")
         mots = "\n".join(mots) if isinstance(mots, list) else str(mots or "")
         if not chauffe.mots_de({"mots": mots}):
-            return None, erreur(400, "donne au moins un mot-clé de la niche (un par ligne : « vinted », « achat revente »…)")
+            return None, erreur(400, "donne au moins un mot-clé de la niche (un par ligne : « cuisine », « achat revente »…)")
         try:
             jours = int(d.get("jours", ancien["jours"] if ancien else 7))
             minutes = int(d.get("minutes_jour", ancien["minutes_jour"] if ancien else 40))
@@ -671,6 +1197,33 @@ def creer(parc, stock, publieur, http):
         oui = lambda k, defaut: bool(d[k]) if k in d else (bool(ancien[k]) if ancien else defaut)   # noqa: E731
         return {"mots": "\n".join(chauffe.mots_de({"mots": mots})), "jours": jours, "minutes_jour": minutes,
                 "likes": oui("likes", True), "abonnements": oui("abonnements", True), "bloque": oui("bloque", True)}, None
+
+    def ranger_nouveaux(comptes, projet):
+        """Un compte trouvé par « Rafraîchir » n'a ni projet ni groupe : en warm-up, il prend le projet choisi (sinon celui
+        des autres comptes de son téléphone) et un groupe neuf « Compte N » ; son TikTok et son Insta de même nom vont
+        ensemble. Bloqué pendant le warm-up, il rentre dans la rotation à la fin (programmation.py)."""
+        neufs = [c for c in comptes if not c["projet"]]
+        if not neufs:
+            return
+        cle = lambda c: c["identifiant"].replace(".", "").replace("_", "")   # noqa: E731
+        groupes = {}
+        for c in neufs:
+            p = projet or next((x["projet"] for x in stock.comptes() if x["udid"] == c["udid"] and x["projet"]), "")
+            if not p:
+                continue
+            # son jumeau de l'autre réseau déjà rangé (même nom) : même groupe (14/10/2026 : le TikTok @mapage.style,
+            # mis en warm-up après son Insta, était parti seul dans un groupe à lui)
+            jumeau = next((x for x in stock.comptes_du_projet(p) if x["groupe"] and x["plateforme"] != c["plateforme"]
+                           and cle(x) == cle(c)), None)
+            if jumeau and (p, cle(c)) not in groupes:
+                groupes[(p, cle(c))] = jumeau["groupe"]
+            if (p, cle(c)) not in groupes:
+                pris = [int(g.split()[-1]) for g in {x["groupe"] for x in stock.comptes_du_projet(p)} | {g for (q_, _), g in groupes.items() if q_ == p}
+                        if g and g.split()[-1].isdigit()]
+                groupes[(p, cle(c))] = f"Compte {max(pris + [0]) + 1}"
+            stock.modifier_compte(c["id"], projet=p, groupe=groupes[(p, cle(c))])
+            c.update(stock.compte(c["id"]))
+            log.info("compte neuf @%s (%s) : projet %s, groupe %s", c["identifiant"], c["plateforme"], p, c["groupe"])
 
     @r.post(P + "/api/chauffes")
     async def creer_chauffes(req):
@@ -693,9 +1246,20 @@ def creer(parc, stock, publieur, http):
             if c["id"] in en_cours:
                 return erreur(409, f"@{c['identifiant']} est déjà en warm-up")
         debut = dt.datetime.now(dt.timezone.utc)
+        fin = debut + dt.timedelta(days=reglages["jours"])
+        rapide = bool(d.get("rapide"))
+        if rapide:   # « ⚡ Rapide jusqu'à 07:00 » (heure de Paris ; passée, c'est le lendemain)
+            try:
+                h, m = (int(x) for x in str(d.get("jusqua") or "07:00").split(":")[:2])
+                fin = dt.datetime.combine(chauffe.jour_paris(debut), dt.time(h, m), tzinfo=chauffe.PARIS)
+            except (TypeError, ValueError):
+                return erreur(400, "heure de fin illisible (ex. 07:00)")
+            if fin <= debut + dt.timedelta(minutes=30):
+                fin += dt.timedelta(days=1)
+            reglages["jours"] = (chauffe.jour_paris(fin) - chauffe.jour_paris(debut)).days + 1
+        ranger_nouveaux(comptes, (d.get("projet") or "").strip())
         faits = [stock.creer_chauffe(c["id"], reglages["mots"], reglages["jours"], reglages["minutes_jour"], reglages["likes"],
-                                     reglages["abonnements"], reglages["bloque"], chauffe.iso(debut),
-                                     chauffe.iso(debut + dt.timedelta(days=reglages["jours"])))
+                                     reglages["abonnements"], reglages["bloque"], chauffe.iso(debut), chauffe.iso(fin), rapide)
                  for c in comptes]
         log.info("warm-up : %s compte(s) pour %s jours, %s min par jour (%s)", len(faits), reglages["jours"],
                  reglages["minutes_jour"], ", ".join("@" + c["identifiant"] for c in comptes))
@@ -748,6 +1312,51 @@ def creer(parc, stock, publieur, http):
         log.info("warm-up de @%s retiré de la liste", ch["identifiant"])
         return web.json_response({"ok": True})
 
+    def etat_inventaires():
+        return {u: {**e, "journal": e.get("journal", [])[-12:]} for u, e in publieur.inventaires.items()}
+
+    @r.post(P + "/api/t/{udid}/sonde-commentaires")
+    async def sonde_commentaires(req):
+        """Ouvre les commentaires d'une vidéo TikTok et d'un reel, captures et arbres gardés (sonde.py) ; rien n'est liké."""
+        t = parc.telephones.get(req.match_info["udid"])
+        if not t or not t.pret:
+            return erreur(409, "téléphone pas prêt")
+        publieur.sondes[t.udid] = {"telephone": t.nom, "etat": "en_file", "journal": []}
+        publieur.sondes_demandees.add(t.udid)
+        return web.json_response({"ok": True})
+
+    @r.get(P + "/api/t/{udid}/sonde-commentaires")
+    async def sonde_etat(req):
+        return web.json_response(publieur.sondes.get(req.match_info["udid"]) or {})
+
+    @r.post(P + "/api/comptes/rafraichir")
+    async def rafraichir_comptes(req):
+        """« 🔄 Rafraîchir les comptes » : chaque téléphone branché lit les comptes connectés à TikTok et Instagram (dès qu'il
+        est libre : une publication passe avant) et ajoute ceux qui manquent (inventaire.py)."""
+        lances, absents = [], []
+        for t in parc.telephones.values():
+            if not t.pret:
+                absents.append(t.nom)
+                continue
+            if publieur.inventaires.get(t.udid, {}).get("etat") in ("en_file", "en_cours"):
+                lances.append(t.nom)
+                continue
+            publieur.inventaires[t.udid] = {"telephone": t.nom, "etat": "en_file", "debut": maintenant(), "fin": None,
+                                            "trouves": {}, "ajoutes": [], "erreurs": [], "journal": []}
+            publieur.inventaires_demandes.add(t.udid)
+            lances.append(t.nom)
+        if not lances:
+            return erreur(409, "aucun téléphone prêt : branche-le et attends qu'il soit prêt")
+        return web.json_response({"lances": lances, "absents": absents, "pause": publieur.pause})
+
+    @r.post(P + "/api/chauffes/pause")
+    async def pause_chauffes(req):
+        """« ⏸ Pause » / « ▶ Reprendre » : tous les warm-ups d'un coup (la séance en cours s'arrête dans les 5 s)."""
+        pause = bool((await req.json()).get("pause"))
+        stock.poser_reglage("pause_warmup", "1" if pause else "0")
+        log.info("warm-ups %s", "mis en pause" if pause else "repris")
+        return web.json_response({"pause": pause})
+
     @r.post(P + "/api/chauffes/{cid:\\d+}/seance")
     async def seance_maintenant(req):
         """Une séance tout de suite (pour voir le warm-up tourner), si le téléphone est libre et la file pas en pause."""
@@ -760,6 +1369,8 @@ def creer(parc, stock, publieur, http):
             return erreur(409, "le téléphone de ce compte n'est pas branché")
         if publieur.pause:
             return erreur(409, "la file est en pause : relance-la d'abord (une séance s'arrête quand la file est en pause)")
+        if chauffe.en_pause(stock):
+            return erreur(409, "les warm-ups sont en pause : appuie sur « ▶ Reprendre » d'abord")
         minutes = min(max(float(d.get("minutes") or chauffe.MINUTES_SEANCE), 2), 60)
         try:
             publieur.lancer_seance(t, ch, minutes)

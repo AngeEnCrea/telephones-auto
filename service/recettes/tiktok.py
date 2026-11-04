@@ -11,6 +11,7 @@ import random
 import time
 
 from recettes.base import ErreurPublication
+from wda import ErreurAgent
 
 BUNDLE = "com.zhiliaoapp.musically"
 HAUT = 140          # la barre du haut de l'écran, en points
@@ -64,8 +65,31 @@ async def publier(r, compte, legende):
 
     await toucher_publier(r)
     await r.a.profondeur(PROFONDEUR)             # TikTok revient sur le fil (vidéos) : lecture courte
+    # « La situation évolue rapidement dans ton pays. Fais attention à ce que tu publies… » (Annuler / Publier), vue le
+    # 28/10/2026 sur @mapage.niche (publication 1735, rien n'était parti) : un avertissement général, on confirme ;
+    # le « Publier » du bas de l'écran, caché dessous, reste dans l'arbre avant celui de la fenêtre : on touche celui
+    # de la fenêtre, sur la ligne d'« Annuler » (publications 1395 et 1523, iPhone 1 : le toucher du bas n'a rien fait)
+    if await r.trouver("La situation évolue rapidement", types=["TextView", "StaticText"], delai=3, contient=True):
+        await r.etape("Avertissement de TikTok « La situation évolue rapidement dans ton pays » : « Publier »")
+        await toucher_publier_fenetre(r)
+    # « Accepter la confirmation et publier la vidéo ? » (Annuler / Publier la vidéo), vue les 28 et 29/10/2026 sur
+    # @autrepage (publications 1941 et 1942, rien n'était parti) : TikTok n'a ajouté aucun son (« Ajouter un son » dans
+    # l'éditeur), il demande au compte (Professionnel) de confirmer l'usage de la musique de NOTRE vidéo. Acceptée
+    # seulement pour un projet où l'utilisateur l'a dit (réglage tiktok_confirmation_musique:<projet> ; un autre projet, 29/10/2026)
+    if await r.trouver("Accepter la confirmation et publier", types=["StaticText"], delai=3, contient=True):
+        if r.stock.reglage(f"tiktok_confirmation_musique:{compte.get('projet') or ''}", "0") != "1":
+            raise ErreurPublication("TikTok demande d'accepter la « Confirmation d'utilisation de la musique » : pas autorisé "
+                                    "pour ce compte (réglage tiktok_confirmation_musique), rien n'est parti")
+        await r.etape("« Accepter la confirmation et publier la vidéo ? » (musique de la vidéo, compte Professionnel) : "
+                      "« Publier la vidéo »")
+        await r.toucher("Publier la vidéo", "Post video", types=["Button"], delai=4)
+    # la 1re vidéo d'un compte neuf : « Publier la vidéo publiquement ? » (Publier maintenant / Annuler), vue le
+    # 16/10/2026 sur @mapage.niche ; les pages sont publiques, c'est voulu
+    if await r.si_present("Publier maintenant", "Post now", types=["Button"], delai=4):
+        await r.etape("« Publier la vidéo publiquement ? » (1re vidéo du compte) : « Publier maintenant »")
     await asyncio.sleep(12)
     if await r.trouver(*DESCRIPTION, types=["TextView"], delai=1):
+        await r.garder_arbre()                   # de quoi reconnaître l'écran inattendu la prochaine fois
         raise ErreurPublication("toujours sur l'écran « Publier » 12 s après : un écran inattendu (voir la capture) ; "
                                 "vérifie sur le compte avant de relancer")
     await r.etape("Envoyée : TikTok finit l'envoi tout seul, le téléphone passe à la suite (lien cherché à part)")
@@ -73,10 +97,62 @@ async def publier(r, compte, legende):
 
 
 async def fermer_intrus(r):
-    """Les fenêtres que TikTok glisse à l'ouverture (règles, nouveautés, amis, avis)."""
+    """Les fenêtres que TikTok glisse à l'ouverture (règles, nouveautés, amis, avis, TikTok Shop)."""
     for _ in range(3):
         if not await r.si_present(*INTRUS, delai=1.5):
             break
+    await fermer_shop(r)
+
+
+async def fenetre_shop(r):
+    """La fenêtre plein écran « Rends TikTok Shop plus pertinent pour toi » (vue le 14/10/2026 sur tous les comptes :
+    elle bloquait toutes les publications TikTok). Elle est HORS de l'arbre (ni ses textes ni ses deux boutons, même lus
+    à 30 niveaux) : on la reconnaît sur la capture à ses deux « Sélectionner » rouges, centrés, l'un sous l'autre (534 et
+    687 pt sur l'iPhone 12), sur fond blanc. Rend le centre (points) du premier, « Un TikTok Shop plus personnalisé »,
+    ou None."""
+    from PIL import Image
+    im = Image.open(io.BytesIO(await r.a.capture())).convert("RGB")
+    px = im.load()
+    largeur, hauteur = r.t.taille or (390, 844)
+    k = im.width / largeur
+    rangs = {}
+    for y in range(int(hauteur * 0.45 * k), min(im.height, int(hauteur * 0.92 * k)), 2):
+        for x in range(int(largeur * 0.3 * k), int(largeur * 0.7 * k), 2):
+            rouge, vert, bleu = px[x, y]
+            if rouge > 200 and vert < 110 and 60 < bleu < 150:      # le rouge de TikTok : (253, 44, 84)
+                rangs.setdefault(y, []).append(x)
+    bandes, b = [], []
+    for y in sorted(rangs):
+        if b and y - b[-1] > 6 * k:
+            bandes.append(b)
+            b = []
+        b.append(y)
+    if b:
+        bandes.append(b)
+    bandes = [b for b in bandes if sum(len(rangs[y]) for y in b) >= 60 and 4 * k <= b[-1] - b[0] <= 25 * k]
+    if len(bandes) != 2 or not 100 * k <= bandes[1][0] - bandes[0][0] <= 220 * k:
+        return None
+    if any(min(px[int(8 * k), b[0]]) < 245 for b in bandes):          # la marge de gauche, blanche : pas une vidéo
+        return None
+    xs = [x for y in bandes[0] for x in rangs[y]]
+    return round(sum(xs) / len(xs) / k), round(sum(bandes[0]) / len(bandes[0]) / k)
+
+
+async def fermer_shop(r):
+    """Répond à la fenêtre TikTok Shop : « Un TikTok Shop plus personnalisé » (choix de l'utilisateur, 15/10/2026). Le toucher passe
+    par la fenêtre de l'app : un geste aux coordonnées de l'écran fait relire tout le fil à l'agent (plus de 2 min)."""
+    for _ in range(2):
+        centre = await fenetre_shop(r)
+        if not centre:
+            return
+        await r.etape("Fenêtre « TikTok Shop » : « Un TikTok Shop plus personnalisé »")
+        avant = r.a.niveaux
+        await r.a.profondeur(2)
+        try:
+            await r.a.toucher_sur(await r.a.fenetre(), *centre)
+        finally:
+            await r.a.profondeur(avant)
+        await asyncio.sleep(2)
 
 
 async def choisir_compte(r, identifiant):
@@ -97,21 +173,90 @@ async def choisir_compte(r, identifiant):
     actif = await compte_actif(r)
     if actif == voulu:
         return
-    essais = 0
-    while True:
-        lignes = await ouvrir_liste(r)
-        if essais >= len(lignes):
+    # TikTok RÉORDONNE sa liste après chaque changement de compte (vu le 18/10/2026 sur l'iPhone 2 : [A, B ✓,
+    # C], puis [C, B, A ✓], puis [C, B ✓, A] : les lignes touchées dans
+    # l'ordre ne passaient jamais par @mapage.principale). Les noms ne se lisent pas, mais chaque ligne a la photo de son
+    # compte et le compte actif une coche rouge : la photo de chaque compte est apprise (ligne cochée, ligne touchée), et
+    # on touche la ligne du compte voulu dès qu'on la reconnaît, sinon une ligne encore inconnue ; photos pareilles (deux
+    # comptes sans photo) : les lignes pas cochées à tour de rôle.
+    connus, essayees = {}, []
+    for tentative in range(8):
+        lignes = await ouvrir_liste_detaillee(r)
+        for _, photo, coche in lignes:
+            if coche and actif:
+                connus[actif] = photo
+        # une photo présente deux fois dans la liste (deux comptes à la même photo : @mapage et
+        # @mapage2.0, 19/10/2026) ne dit pas de quel compte il s'agit : ces lignes restent à essayer
+        autres = [x for x in lignes if not x[2]]
+        unique = lambda x: sum(1 for y in lignes if photos_proches(x[1], y[1])) == 1   # noqa: E731
+        cible = [x for x in autres if voulu in connus and unique(x) and photos_proches(x[1], connus[voulu])]
+        inconnues = [x for x in autres if not unique(x) or not any(photos_proches(x[1], p) for p in [*connus.values(), *essayees])]
+        if cible or inconnues:
+            choix = (cible or inconnues)[0]
+        elif autres and tentative < len(lignes) + 2:
+            choix = autres[tentative % len(autres)]
+        else:
             await r.a.toucher((r.t.taille or (390, 844))[0] / 2, 150)        # au-dessus du panneau : il se ferme
             raise ErreurPublication(f"{voulu} n'est pas parmi les {len(lignes)} compte(s) connecté(s) à TikTok sur ce "
                                     f"téléphone (compte actif : {actif or 'illisible'}) : connecte-le une fois à la main "
                                     "(Profil › flèche à côté du nom › Ajouter un compte)")
-        await r.etape(f"Liste des comptes : ligne {essais + 1} sur {len(lignes)}")
-        await r.a.toucher((r.t.taille or (390, 844))[0] / 2, lignes[essais])
-        essais += 1
-        actif = await attendre_changement(r, actif, voulu)
+        await r.etape(f"Liste des comptes : ligne {lignes.index(choix) + 1} sur {len(lignes)}")
+        await r.a.toucher((r.t.taille or (390, 844))[0] / 2, choix[0])
+        nouveau = await attendre_changement(r, actif, voulu)
+        if nouveau and nouveau != actif:
+            connus[nouveau] = choix[1]
+        else:
+            essayees.append(choix[1])
+        actif = nouveau
         if actif == voulu:
             await r.etape(f"Compte actif : {voulu}")
             return
+    raise ErreurPublication(f"{voulu} : la liste des comptes de TikTok tourne sans le trouver (compte actif : "
+                            f"{actif or 'illisible'}) : voir les captures")
+
+
+async def lister_comptes(r):
+    """Les @ connectés à TikTok sur ce téléphone (bouton « Rafraîchir » du warm-up, 13/10/2026). La liste « Changer de
+    compte » n'est pas dans l'arbre : chaque ligne est touchée une à une et le @ se lit sur le profil après le
+    changement (comme choisir_compte). « Ajouter un compte » n'est jamais touché. Rend les identifiants sans @."""
+    await r.etape("Ouverture de TikTok")
+    await r.a.profondeur(PROFONDEUR)
+    await r.lancer_propre(BUNDLE)
+    await r.alertes()
+    await fermer_intrus(r)
+    await r.toucher("Profil", "Profile", types=["Button"], delai=10)
+    await fermer_intrus(r)
+    if not await r.trouver("nav_bar_end_settings", delai=8):
+        raise ErreurPublication("le profil de TikTok ne s'ouvre pas : une fenêtre de TikTok gêne ? (voir la capture)")
+    await r.a.profondeur(PROFONDEUR_PROFIL)
+    await fin_du_chargement(r)
+    actif = await compte_actif(r)
+    vus = [actif] if actif else []
+    connus, essayees = {}, []            # comme choisir_compte : la liste se réordonne, les lignes se reconnaissent à leur photo
+    for tentative in range(12):
+        lignes = await ouvrir_liste_detaillee(r)
+        if not tentative:
+            await r.etape(f"{len(lignes)} compte(s) dans la liste de TikTok")
+        for _, photo, coche in lignes:
+            if coche and actif:
+                connus[actif] = photo
+        unique = lambda x: sum(1 for y in lignes if photos_proches(x[1], y[1])) == 1   # noqa: E731
+        inconnues = [x for x in lignes if not x[2]
+                     and (not unique(x) or not any(photos_proches(x[1], p) for p in [*connus.values(), *essayees]))]
+        if not inconnues or len(vus) >= len(lignes):
+            await r.a.toucher((r.t.taille or (390, 844))[0] / 2, 150)        # au-dessus du panneau : il se ferme
+            break
+        await r.a.toucher((r.t.taille or (390, 844))[0] / 2, inconnues[0][0])
+        nouveau = await attendre_changement(r, actif, "\0")
+        if nouveau and nouveau != actif:
+            connus[nouveau] = inconnues[0][1]
+        else:
+            essayees.append(inconnues[0][1])
+        actif = nouveau
+        if actif and actif not in vus:
+            vus.append(actif)
+            await r.etape(f"Compte trouvé : {actif}", capture=False)
+    return [x.lstrip("@").strip().lower() for x in vus if x]
 
 
 async def fin_du_chargement(r, delai=15):
@@ -166,7 +311,24 @@ async def compte_actif(r):
         return None
 
 
-async def lignes_comptes(r):
+async def ouvrir_liste_detaillee(r):
+    """Comme ouvrir_liste, mais chaque ligne avec la photo de son compte et sa coche (le compte actif) : [(y, photo,
+    coche)], lues sur une capture prise une demi-seconde après l'ouverture (le panneau a fini de monter)."""
+    await ouvrir_liste(r)
+    await asyncio.sleep(0.5)
+    lignes = await lignes_comptes(r, details=True)
+    if not lignes:
+        raise ErreurPublication("la liste des comptes de TikTok ne s'est pas ouverte (flèche à côté du nom, en haut du "
+                                "profil) : voir la capture")
+    return lignes
+
+
+def photos_proches(a, b):
+    """Deux photos de compte (8 × 8 gris) qui se ressemblent : la même, d'une capture à l'autre."""
+    return bool(a and b) and sum(abs(p - q) for p, q in zip(a, b)) / len(a) < 14
+
+
+async def lignes_comptes(r, details=False):
     """Les centres (en points, de haut en bas) des lignes de compte du panneau « Changer de compte », lus sur la
     capture : le panneau monte du bas de l'écran ; sous ses lignes, son fond uni. En remontant la colonne x = 78 pt
     (entre les avatars et les noms) jusqu'au premier point qui n'est plus ce fond, on trouve le haut du panneau ;
@@ -201,7 +363,32 @@ async def lignes_comptes(r):
                 lignes.append((debut + y) / 2)
             debut = None
         y += 0.5
-    return lignes[:-1]
+    lignes = lignes[:-1]
+    if not details:
+        return lignes
+
+    def photo(y):                        # le carré de 24 pt au centre de l'avatar (x = 44 pt), réduit à 8 × 8 en gris
+        boite = tuple(int(v * k) for v in (44 - 12, y - 12, 44 + 12, y + 12))
+        return list(im.crop(boite).convert("L").resize((8, 8)).getdata())
+
+    def coche(y):
+        """La coche rouge du compte actif, au bout de sa ligne : un TRAIT fin. Les pastilles rouges des notifications
+        (un chiffre blanc sur un rond plein, au même endroit, vues le 19/10/2026 sur l'iPhone 1 : toutes les lignes
+        passaient pour cochées, plus aucun TikTok ne partait) remplissent leur cadre : écartées."""
+        rouges = []                      # point par point : le trait de la coche est fin (vu le 18/10/2026)
+        for yy in range(int(y - 12), int(y + 13)):
+            for xx in range(int(largeur - 64), int(largeur - 8)):
+                rouge, vert, bleu = point(xx, yy)
+                if rouge > 200 and vert < 110 and 50 < bleu < 150:
+                    rouges.append((xx, yy))
+        if len(rouges) < 4:
+            return False
+        xs, ys = [x for x, _ in rouges], [y_ for _, y_ in rouges]
+        return len(rouges) / ((max(xs) - min(xs) + 1) * (max(ys) - min(ys) + 1)) < 0.45
+    out = [(y, photo(y), coche(y)) for y in lignes]
+    if sum(1 for x in out if x[2]) > 1:  # une seule ligne est le compte actif : plusieurs « coches », on n'en croit aucune
+        out = [(y, ph, False) for y, ph, _ in out]
+    return out
 
 
 async def choisir_video(r):
@@ -272,6 +459,30 @@ async def ecrire_legende(r, legende):
     await asyncio.sleep(1.2)
     await r.taper(lambda: champ_description(r), legende)
     await asyncio.sleep(1)                       # le clavier reste ouvert : « Publier » est alors en haut à droite
+
+
+async def toucher_publier_fenetre(r):
+    """Le « Publier » d'une fenêtre de TikTok par-dessus l'écran « Publier » : celui qui est sur la ligne d'« Annuler »,
+    sinon le plus haut (celui du bas de l'écran est toujours le plus bas)."""
+    async def rects(*labels):
+        out = []
+        pred = "type == 'XCUIElementTypeButton' AND label IN {" + ", ".join(f"'{x}'" for x in labels) + "}"
+        for eid in await r.a.chercher("predicate string", pred):
+            try:
+                rc = await r.a.rect(eid)
+            except ErreurAgent:
+                continue
+            if rc["width"] > 0 and rc["height"] > 0:
+                out.append((eid, rc))
+        return out
+    publier = await rects("Publier", "Post")
+    if not publier:
+        raise ErreurPublication("le « Publier » de la fenêtre de TikTok est introuvable")
+    annuler = await rects("Annuler", "Cancel")
+    sur_la_ligne = [p for p in publier if any(abs(p[1]["y"] - a[1]["y"]) < 20 for a in annuler)]
+    eid = (sur_la_ligne or sorted(publier, key=lambda p: p[1]["y"]))[0][0]
+    await r.a.cliquer(eid)
+    await asyncio.sleep(0.8)
 
 
 async def toucher_publier(r):

@@ -43,8 +43,15 @@ function dessiner() {
   $('#f-comptes').innerHTML = D.comptes.length ? D.comptes.map(c => {
     const non = !c.possible || c.en_chauffe, pourquoi = c.en_chauffe ? 'déjà en warm-up' : !c.telephone && !c.possible ? 'pas de téléphone' : !c.possible ? 'pas encore' : esc(c.telephone || '');
     return `<label class="${non ? 'non' : ''}"><input type="checkbox" value="${c.id}" ${non ? 'disabled' : ''} ${coches.has(c.id) && !non ? 'checked' : ''}>
-      <span class="plat">${PLAT[c.plateforme] || c.plateforme}</span> @${esc(c.identifiant)}${c.groupe ? ` <span class="muted small">${esc(c.groupe)}</span>` : ''}<span class="q">${pourquoi}</span></label>`;
+      <span class="plat">${PLAT[c.plateforme] || c.plateforme}</span> @${esc(c.identifiant)}${c.groupe ? ` <span class="muted small">${esc(c.groupe)}</span>` : !c.projet ? ' <span class="chip rapide">nouveau</span>' : ''}<span class="q">${pourquoi}</span></label>`;
   }).join('') : '<div class="vide-l">Aucun compte : ajoute-les dans l’onglet Comptes de Téléphones (connecte-les d’abord sur l’iPhone).</div>';
+  $('#en-pause').hidden = !D.pause;
+  $('#b-pause').textContent = D.pause ? '▶ Reprendre' : '⏸ Pause';
+  $('#b-pause').classList.toggle('prim', !!D.pause);
+  const projets = D.projets || [];
+  if ($('#f-projet').options.length !== projets.length) $('#f-projet').innerHTML = projets.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  majProjet();
+  dessinerInventaires();
   $('#en-cours').innerHTML = actifs.map(carte).join('') || '<div class="vide-l">Aucun compte en warm-up. Coche des comptes à gauche, donne les mots-clés de leur niche, et lance.</div>';
   $('#finis').innerHTML = finis.map(carte).join('') || '<div class="vide-l">Rien pour l’instant.</div>';
   document.querySelectorAll('[data-a]').forEach(b => b.onclick = () => action(b.dataset.a, +b.dataset.id));
@@ -52,17 +59,19 @@ function dessiner() {
 }
 
 function carte(c) {
-  const fini = c.etat !== 'en_cours', pct = Math.min(100, Math.round(100 * (fini ? c.jours : c.jour - 0.5) / c.jours));
+  const fini = c.etat !== 'en_cours', pct = c.rapide ? Math.min(100, Math.round(100 * (Date.now() - Date.parse(c.debut)) / (Date.parse(c.fin) - Date.parse(c.debut))))
+    : Math.min(100, Math.round(100 * (fini ? c.jours : c.jour - 0.5) / c.jours));
   const der = c.seances[0], t = c.totaux;
   const plan = c.plan.map(s => `<span class="se ${s.etat}" title="${esc(s.etat.replace('_', ' '))} · ${duree(s.minutes)} prévues${s.faites ? ', ' + duree(s.faites) + ' faites' : ''}">${ETAT_SE[s.etat] || ''} ${aParis(s.debut).heure}</span>`).join('');
   return `<div class="wc ${fini ? 'fini' : ''}">
     <div class="l1"><span class="plat">${PLAT[c.plateforme] || c.plateforme}</span><span class="nom">@${esc(c.identifiant)}</span>
-      ${c.groupe ? `<span class="g">${esc(c.groupe)}</span>` : ''}<span class="grow"></span><span class="chip ${c.etat}">${ETAT[c.etat]}</span></div>
+      ${c.groupe ? `<span class="g">${esc(c.groupe)}</span>` : ''}<span class="grow"></span>${c.rapide ? '<span class="chip rapide">⚡ rapide</span>' : ''}<span class="chip ${c.etat}">${ETAT[c.etat]}</span></div>
     <div class="barre-p"><div style="width:${pct}%"></div></div>
-    <div class="g">${fini ? `${c.jours} jour${c.jours > 1 ? 's' : ''} · fini le ${aParis(c.fin).date}` : `Jour ${c.jour} sur ${c.jours} · jusqu’au ${aParis(c.fin).date} à ${aParis(c.fin).heure}`} · ${c.minutes_jour} min/jour</div>
+    <div class="g">${c.rapide ? (fini ? `⚡ Rapide · fini le ${aParis(c.fin).date} à ${aParis(c.fin).heure}` : `⚡ Rapide · séances d’affilée jusqu’au ${aParis(c.fin).date} à ${aParis(c.fin).heure}`)
+      : `${fini ? `${c.jours} jour${c.jours > 1 ? 's' : ''} · fini le ${aParis(c.fin).date}` : `Jour ${c.jour} sur ${c.jours} · jusqu’au ${aParis(c.fin).date} à ${aParis(c.fin).heure}`} · ${c.minutes_jour} min/jour`}</div>
     <div class="mots">${c.mots.map(m => `<span>${esc(m)}</span>`).join('')}</div>
-    ${fini ? '' : `<div class="seances"><span class="g">Aujourd’hui ${duree(c.aujourdhui.minutes)} / ${duree(c.aujourdhui.cible)} :</span>${plan || '<span class="g">rien de prévu</span>'}</div>`}
-    <div class="chiffres"><span>👀 ${t.vues} vidéos</span><span>❤️ ${t.likes} likes</span><span>➕ ${t.abonnements} abonnements</span><span>🔎 ${t.recherches} recherches</span><span>⏱ ${duree(t.minutes)}</span></div>
+    ${fini ? '' : `<div class="seances"><span class="g">${c.rapide ? 'En tout' : 'Aujourd’hui'} ${duree(c.aujourdhui.minutes)} / ${duree(c.aujourdhui.cible)} :</span>${plan || '<span class="g">rien de prévu</span>'}</div>`}
+    <div class="chiffres"><span>👀 ${t.vues} vidéos</span><span>❤️ ${t.likes} likes</span>${t.likes_commentaires ? `<span>💬❤️ ${t.likes_commentaires} likes de commentaires</span>` : ''}<span>➕ ${t.abonnements} abonnements</span><span>🔎 ${t.recherches} recherches</span><span>⏱ ${duree(t.minutes)}</span></div>
     ${fini ? '' : c.bloque ? `<div class="bloquee">🚫 Publications bloquées jusqu’à la fin du warm-up</div>` : '<div class="bloquee non">Publie en parallèle (publications pas bloquées)</div>'}
     ${der ? `<div class="derniere">Dernière séance : ${aParis(der.debut).date} à ${aParis(der.debut).heure} · ${der.etat === 'faite' ? 'faite' : der.etat === 'en_cours' ? 'en cours' : der.etat === 'coupee' ? 'coupée' : 'ratée'}
       · ${der.vues} vidéos${der.likes ? `, ${der.likes} likes` : ''}${der.abonnements ? `, ${der.abonnements} abonnements` : ''}${der.erreur ? ` · <span class="${der.etat === 'echec' ? 'err' : ''}">${esc(der.erreur)}</span>` : ''}</div>` : ''}
@@ -147,13 +156,52 @@ function estimer() {
   $('#f-estim').textContent = `${seancesParJour(min)} séance${seancesParJour(min) > 1 ? 's' : ''} par jour · ≈ ${String(Math.round(min * MO_PAR_MINUTE / 100) / 10).replace('.', ',')} Go de 5G par jour et par compte`
     + (n > 1 ? ` (${String(Math.round(n * min * MO_PAR_MINUTE / 100) / 10).replace('.', ',')} Go pour les ${n})` : '');
 }
-$('#f-new').oninput = estimer;
+$('#f-new').oninput = () => { estimer(); majProjet(); };
+
+// les comptes neufs cochés (trouvés par « Rafraîchir », sans projet) : on choisit leur projet ; le rapide cache jours/minutes
+function majProjet() {
+  const coches = [...document.querySelectorAll('#f-comptes input:checked')].map(i => D.comptes.find(c => c.id === +i.value));
+  $('#f-projet-l').hidden = !coches.some(c => c && !c.projet) || !(D.projets || []).length;
+  $('#f-normal').style.opacity = $('#f-rapide').checked ? .4 : 1;
+  $('#f-estim').hidden = $('#f-rapide').checked;
+}
+
+// « 🔄 Rafraîchir les comptes » (13/10/2026) : chaque iPhone lit ses comptes TikTok et Insta, ajoute ceux qui manquent
+const ETAT_INV = { en_file: 'en file (dès que le téléphone est libre)', en_cours: 'lit les comptes…', fini: 'fini', en_partie: 'fini en partie', echec: 'raté' };
+function dessinerInventaires() {
+  const l = Object.values(D.inventaires || {});
+  $('#inv').innerHTML = l.map(e => {
+    const n = Object.values(e.trouves || {}).reduce((a, x) => a + x.length, 0);
+    const aj = (e.ajoutes || []).map(a => `${PLAT[a.plateforme]} @${esc(a.identifiant)}`).join(', ');
+    return `<div>📱 ${esc(e.telephone)} : <span class="${e.etat === 'echec' ? 'err' : e.etat === 'fini' ? 'ok' : ''}">${ETAT_INV[e.etat] || esc(e.etat)}</span>`
+      + (['fini', 'en_partie'].includes(e.etat) ? ` · ${n} compte(s) vu(s)${aj ? ` · <b>ajouté(s) : ${aj}</b>` : ' · rien de nouveau'}` : '')
+      + ((e.erreurs || []).length ? ` · <span class="err">${esc(e.erreurs.join(' ; '))}</span>` : '') + '</div>';
+  }).join('');
+  const encore = l.some(e => ['en_file', 'en_cours'].includes(e.etat));
+  clearTimeout(dessinerInventaires.t);
+  if (encore) dessinerInventaires.t = setTimeout(charger, 4000);
+}
+$('#b-pause').onclick = async () => {
+  try {
+    const r = await api('chauffes/pause', { pause: !(D && D.pause) });
+    toast(r.pause ? '⏸ Warm-ups en pause : la séance en cours s’arrête, le téléphone est à toi.' : '▶ Warm-ups repris.');
+    charger();
+  } catch (e) { toast(e.message); }
+};
+$('#b-rafraichir').onclick = async () => {
+  try {
+    const r = await api('comptes/rafraichir', {});
+    toast(`Rafraîchissement lancé sur ${r.lances.join(', ')}${r.absents.length ? ` (pas prêt : ${r.absents.join(', ')})` : ''}${r.pause ? ' · la file est en pause : relance-la pour qu’il démarre' : ''}`);
+    charger();
+  } catch (e) { toast(e.message); }
+};
 $('#f-new').onsubmit = async ev => {
   ev.preventDefault();
   const f = ev.target, comptes = [...document.querySelectorAll('#f-comptes input:checked')].map(i => +i.value);
   try {
     const r = await api('chauffes', { comptes, mots: f.mots.value, jours: +f.jours.value, minutes_jour: +f.minutes_jour.value,
-      likes: f.likes.checked, abonnements: f.abonnements.checked, bloque: f.bloque.checked });
+      likes: f.likes.checked, abonnements: f.abonnements.checked, bloque: f.bloque.checked,
+      rapide: f.rapide.checked, jusqua: f.jusqua.value, projet: f.projet.value });
     toast(`${r.chauffes.length} compte${r.chauffes.length > 1 ? 's' : ''} en warm-up.`);
     document.querySelectorAll('#f-comptes input:checked').forEach(i => i.checked = false);
     charger();

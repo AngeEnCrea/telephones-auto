@@ -21,6 +21,7 @@ class Parc:
         self.http = http
         self.telephones = {}
         self.pilote = {"etat": "attente", "message": "Démarrage…"}
+        self.muet_depuis = None   # le pilote Apple ne répond plus depuis… (time.monotonic())
         self.tunnel = Processus("tunnel", [lieux.IOS, "tunnel", "start", "--userspace",
                                            f"--pair-record-path={lieux.APPAIRAGE}"])
         self.besoin_tunnel = False
@@ -58,9 +59,16 @@ class Parc:
         try:
             udids = await goios.udids()
             self.pilote = {"etat": "ok", "message": "Pilote Apple en marche"}
+            self.muet_depuis = None
         except ErreurIos as e:
             self.pilote = {"etat": "ko", "message": f"Le pilote Apple ne répond pas ({e})",
                            "aide": "Service « Apple Mobile Device Service » arrêté ? Redémarre le PC ou relance le service."}
+            # un « ios list » sans réponse en 20 s (PC à 100 % : 03/11/2026, les deux iPhone « débranchés » ensemble toutes
+            # les 5-10 min, publications ratées au transfert) ne débranche rien : seulement après 2 min de silence
+            self.muet_depuis = self.muet_depuis or time.monotonic()
+            if time.monotonic() - self.muet_depuis < 120:
+                log.warning("pilote Apple sans réponse (%s) : les iPhone restent branchés", e)
+                return
             udids = []
         for u in udids:
             t = self.telephones.get(u)

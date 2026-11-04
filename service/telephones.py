@@ -18,6 +18,7 @@ from aiohttp import web  # noqa: E402
 import journal  # noqa: E402
 import lieux  # noqa: E402
 import processus  # noqa: E402
+import sante  # noqa: E402
 import serveur  # noqa: E402
 from parc import Parc  # noqa: E402
 from publication import Publieur  # noqa: E402
@@ -45,7 +46,7 @@ async def principal():
         await http.close()
         return
     log.info("interface : http://%s:%s%s/", lieux.HOTE, lieux.PORT, lieux.PREFIXE)
-    taches = [asyncio.create_task(parc.boucle()), asyncio.create_task(publieur.boucle())]
+    taches = [asyncio.create_task(parc.boucle()), asyncio.create_task(publieur.boucle()), asyncio.create_task(sante.boucle(publieur))]
     try:
         await asyncio.gather(*taches)
     finally:

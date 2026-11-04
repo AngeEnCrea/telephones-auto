@@ -313,6 +313,14 @@ class Telephone:
             e = await self.agent.ecran()
             s = (e or {}).get("screenSize") or {}
             self.taille = (s.get("width"), s.get("height"))
+            # d'abord l'écran d'accueil (commande hors session, qui n'attend aucun repos) : si l'agent redémarre pendant
+            # que TikTok tourne, ces réglages, eux, attendraient le repos de la vidéo et ne passeraient jamais ; et sans
+            # eux, chaque geste suivant attend ce repos (14/10/2026 : agent bloqué après des redémarrages en pleine séance)
+            try:
+                await self.agent.accueil()
+                await asyncio.sleep(1)
+            except ErreurAgent as e:
+                log.warning("%s : écran d'accueil impossible avant les réglages (%s)", self.nom, e)
             await self.agent.reglages(mjpegServerFramerate=10, mjpegScalingFactor=50, mjpegServerScreenshotQuality=45,
                                       # apps vidéo (TikTok, Instagram) : elles ne sont jamais « au repos » ; sans ça,
                                       # chaque geste attend ce repos et l'agent se bloque (mesuré le 02/10/2026 sur TikTok)

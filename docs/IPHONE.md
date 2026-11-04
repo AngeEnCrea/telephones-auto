@@ -70,6 +70,10 @@ Chaque publication laisse sa vidéo dans la pellicule : vide-la de temps en temp
 
 ## 6. Les comptes
 
+Pour YouTube Shorts : installe **YT Studio** et connecte ta chaîne dans l'app. À la première vidéo, iOS demande
+d'autoriser le Raccourci à produire et à partager des photos : le service répond « Toujours autoriser » tout seul.
+
+
 1. **Connecte-toi toi-même** à chaque compte dans l'app, sur l'iPhone. Plusieurs comptes dans la même app :
    TikTok › Profil › ton nom (en haut) › Ajouter un compte ; Instagram › Profil › ton nom › Ajouter un compte.
 2. Dans la page, onglet **Comptes** : plateforme, @ exact, le téléphone, et un **groupe** (les comptes qui publient
