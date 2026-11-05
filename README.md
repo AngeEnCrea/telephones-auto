@@ -51,6 +51,8 @@ Tu le pilotes depuis une page web locale (http://127.0.0.1:4330/telephones/) :
 [`CLAUDE.md`](CLAUDE.md) lui explique tout : ce qu'il fait lui-même, ce que toi seul peux faire (brancher, « Se fier »,
 te connecter), et comment vérifier chaque étape.
 
+**Sur Windows, à la main, le tuto complet :** [`docs/TUTO_WINDOWS.md`](docs/TUTO_WINDOWS.md), de zéro à la première publication.
+
 **À la main :** suis [`docs/INSTALLATION.md`](docs/INSTALLATION.md) (ordinateur), puis [`docs/IPHONE.md`](docs/IPHONE.md)
 (iPhone), puis [`docs/UTILISATION.md`](docs/UTILISATION.md). En cas de souci : [`docs/DEPANNAGE.md`](docs/DEPANNAGE.md).
 
